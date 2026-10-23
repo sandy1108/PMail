@@ -25,6 +25,9 @@
 
     <el-divider class="settings-divider"/>
 
+    <AccessCodeSettings/>
+    <el-divider class="settings-divider"/>
+
     <div class="settings-header">
       <h3 class="danger-text">{{ lang.logout }}</h3>
       <p class="settings-desc">{{ lang.logout_desc }}</p>
@@ -39,6 +42,7 @@
 
 <script setup>
 import {reactive} from 'vue'
+import AccessCodeSettings from './AccessCodeSettings.vue'
 import {ElNotification} from 'element-plus'
 import lang from '../i18n/i18n';
 import {http} from "@/utils/axios";
@@ -70,6 +74,7 @@ const submit = function () {
     return
   }
   http.post("/api/settings/modify_password", {password: ruleForm.new_pwd}).then(res => {
+    if (res.errorNo === 0) location.reload();
     ElNotification({
       title: res.errorNo === 0 ? lang.succ : lang.fail,
       message: res.data,

@@ -30,7 +30,7 @@ func EmailDetail(ctx *context.Context, w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	email, err := detail.GetEmailDetail(ctx, retData.ID, true)
+	email, err := detail.GetEmailDetail(ctx, retData.ID, !ctx.ReadOnly)
 	if err != nil {
 		response.NewErrorResponse(response.ServerError, err.Error(), "").FPrint(w)
 		return

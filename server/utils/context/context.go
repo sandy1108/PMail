@@ -16,6 +16,7 @@ type Context struct {
 	Values          map[string]any
 	Lang            string
 	IsAdmin         bool
+	ReadOnly        bool // 授权码上下文禁止邮件状态变更
 }
 
 func (c *Context) SetValue(key string, value any) {

@@ -89,11 +89,16 @@ func contextIterceptor(h controllers.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 		}
 
-		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/ping" && !validWriteOrigin(r) {
+		_, hasAuthorization := r.Header["Authorization"]
+		if !hasAuthorization && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/ping" && !validWriteOrigin(r) {
 			http.Error(w, "Forbidden request origin or content type", http.StatusForbidden)
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 40<<20)
+		bodyLimit := int64(40 << 20)
+		if hasAuthorization {
+			bodyLimit = 64 << 10
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		ctx := &context.Context{}
 		ctx.Context = r.Context()
 		ctx.SetValue(context.LogID, id.GenLogID())
@@ -102,6 +107,13 @@ func contextIterceptor(h controllers.HandlerFunc) http.HandlerFunc {
 			lang = "en"
 		}
 		ctx.Lang = lang
+
+		if hasAuthorization {
+			if authenticateAccessCode(w, r, ctx) {
+				h(ctx, w, r)
+			}
+			return
+		}
 
 		if config.IsInit {
 			user := cast.ToString(session.Instance.Get(ctx, "user"))

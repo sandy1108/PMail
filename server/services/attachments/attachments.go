@@ -53,8 +53,9 @@ func GetAttachmentsByIndex(ctx *context.Context, emailId int, index int) (string
 	var atts []parsemail.Attachment
 	_ = json.Unmarshal([]byte(email.Attachments), &atts)
 
-	if len(atts) > index {
-		return atts[index].Filename, atts[index].Content
+	if index >= 0 && len(atts) > index {
+		// 非nil空切片表示找到了零字节附件，nil仍表示不存在或无权限。
+		return atts[index].Filename, append([]byte{}, atts[index].Content...)
 	}
 	return "", nil
 }

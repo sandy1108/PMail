@@ -92,6 +92,10 @@ func syncTables() {
 	if err != nil {
 		panic(err)
 	}
+	err = Instance.Sync2(&models.AccessCode{})
+	if err != nil {
+		panic(err)
+	}
 	err = Instance.Sync2(&models.Email{})
 	if err != nil {
 		panic(err)

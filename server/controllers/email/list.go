@@ -49,11 +49,34 @@ func EmailList(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
 	reqBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		log.WithContext(ctx).Errorf("%+v", err)
+		if ctx.ReadOnly {
+			response.NewErrorResponse(response.ParamsError, "Invalid request", "").FPrint(w)
+			return
+		}
 	}
 	var retData emailRequest
 	err = json.Unmarshal(reqBytes, &retData)
 	if err != nil {
 		log.WithContext(ctx).Errorf("%+v", err)
+		if ctx.ReadOnly {
+			response.NewErrorResponse(response.ParamsError, "Invalid request", "").FPrint(w)
+			return
+		}
+	}
+
+	// 授权码客户端分页必须有界，避免单次读取绕过SQL LIMIT或整数溢出。
+	if ctx.ReadOnly {
+		if retData.PageSize == 0 {
+			retData.PageSize = 15
+		}
+		if retData.CurrentPage == 0 {
+			retData.CurrentPage = 1
+		}
+		maxInt := int(^uint(0) >> 1)
+		if retData.PageSize < 1 || retData.PageSize > 100 || retData.CurrentPage < 1 || retData.CurrentPage > maxInt/retData.PageSize || len(retData.Keyword) > 4096 {
+			response.NewErrorResponse(response.ParamsError, "Invalid pagination", "").FPrint(w)
+			return
+		}
 	}
 
 	offset := 0
