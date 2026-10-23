@@ -1,10 +1,11 @@
 package http_server
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/controllers"
 	"github.com/Jinnrry/pmail/db"
@@ -14,9 +15,9 @@ import (
 	"github.com/Jinnrry/pmail/session"
 	"github.com/Jinnrry/pmail/utils/context"
 	"github.com/Jinnrry/pmail/utils/id"
-	"github.com/Jinnrry/pmail/utils/password"
 	olog "log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -53,7 +54,7 @@ func HttpsStart() {
 	if config.Instance.HttpsEnabled != 2 {
 		log.Infof("Https Server Start On Port :%d", HttpsPort)
 		httpsServer = &http.Server{
-			Addr:         fmt.Sprintf(":%d", HttpsPort),
+			Addr:         config.Instance.HTTPAddress(HttpsPort),
 			Handler:      session.Instance.LoadAndSave(mux),
 			ReadTimeout:  time.Second * 90,
 			WriteTimeout: time.Second * 90,
@@ -88,6 +89,11 @@ func contextIterceptor(h controllers.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 		}
 
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/ping" && !validWriteOrigin(r) {
+			http.Error(w, "Forbidden request origin or content type", http.StatusForbidden)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 40<<20)
 		ctx := &context.Context{}
 		ctx.Context = r.Context()
 		ctx.SetValue(context.LogID, id.GenLogID())
@@ -102,6 +108,17 @@ func contextIterceptor(h controllers.HandlerFunc) http.HandlerFunc {
 			var userInfo models.User
 			if user != "" {
 				_ = json.Unmarshal([]byte(user), &userInfo)
+			}
+			if userInfo.ID > 0 {
+				var current models.User
+				ok, err := db.Instance.ID(userInfo.ID).Where("disabled=0").Get(&current)
+				digest := sha256.Sum256([]byte(current.Password))
+				if err != nil || !ok || session.Instance.GetString(ctx, "credential") != hex.EncodeToString(digest[:]) {
+					userInfo = models.User{}
+					session.Instance.Clear(ctx)
+				} else {
+					userInfo = current
+				}
 			}
 			if userInfo.ID > 0 {
 				ctx.UserID = userInfo.ID
@@ -140,31 +157,33 @@ func contextIterceptor(h controllers.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-/*
-Token 格式：  {account}:md5(md5(md5(password+"pmail")+"pmail2023")+{Unix timestamp}):{Unix timestamp}
-比如：         admin::
-*/
+// 旧密码衍生Token无法安全兼容新口令存储，明确停用。
 func getLoginInfoByToken(token string) (models.User, error) {
-	ret := models.User{}
-	data := strings.Split(token, ":")
-	if len(data) != 3 {
-		return ret, errors.New("token format error")
-	}
-	account := data[0]
-	encodePwd := data[1]
-	requestTimeStamp := cast.ToInt64(data[2])
-	if time.Now().Unix()-requestTimeStamp >= 5 {
-		return ret, errors.New("token expired")
-	}
-	var user models.User
-	db.Instance.Table("user").Where("account =? and disabled=0", account).Get(&user)
-	if user.ID == 0 {
-		return ret, errors.New("account or password error")
-	}
-	tokenPwd := password.Md5Encode(fmt.Sprintf("%s%d", user.Password, requestTimeStamp))
-	if tokenPwd != encodePwd {
-		return ret, errors.New("account or password error")
-	}
+	return models.User{}, errors.New("legacy Token authentication disabled; use web session")
+}
 
-	return user, nil
+// 变更请求只允许JSON和已配置的同源网页；不依赖客户端提供的转发头。
+func validWriteOrigin(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		switch r.URL.Path {
+		case "/api/group", "/api/group/list", "/api/plugin/list":
+			return true
+		default:
+			return false
+		}
+	}
+	if r.Method != http.MethodPost {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "application/json") {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		ref, err := url.Parse(r.Header.Get("Referer"))
+		if err == nil && ref.Host != "" {
+			origin = ref.Scheme + "://" + ref.Host
+		}
+	}
+	return config.Instance.WebOrigin != "" && origin == config.Instance.WebOrigin
 }

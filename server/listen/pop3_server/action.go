@@ -55,7 +55,6 @@ func (a action) Capa(session *gopop.Session) ([]string, error) {
 		"USER",
 		"PASS",
 		"TOP",
-		"APOP",
 		"STAT",
 		"UIDL",
 		"LIST",
@@ -102,18 +101,14 @@ func (a action) Pass(session *gopop.Session, pwd string) error {
 		session.Ctx = tc
 	}
 
-	log.WithContext(session.Ctx).Debugf("POP3 PASS %s , User:%s", pwd, session.User)
-
 	var user models.User
 
-	encodePwd := password.Encode(pwd)
-
-	_, err := db.Instance.Where("account =? and password =? and disabled = 0", session.User, encodePwd).Get(&user)
+	_, err := db.Instance.Where("account =? and disabled = 0", session.User).Get(&user)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		log.WithContext(session.Ctx.(*context.Context)).Errorf("%+v", err)
 	}
 
-	if user.ID > 0 {
+	if user.ID > 0 && password.Verify(user.Password, pwd) {
 		session.Status = gopop.TRANSACTION
 
 		session.Ctx.(*context.Context).UserID = user.ID
@@ -128,40 +123,7 @@ func (a action) Pass(session *gopop.Session, pwd string) error {
 
 // Apop APOP登陆命令
 func (a action) Apop(session *gopop.Session, username, digest string) error {
-	if session.Ctx == nil {
-		tc := &context.Context{}
-		tc.SetValue(context.LogID, id.GenLogID())
-		session.Ctx = tc
-	}
-	log.WithContext(session.Ctx).Debugf("POP3 CMD: APOP, Args:%s,%s", username, digest)
-
-	infos := strings.Split(username, "@")
-	if len(infos) > 1 {
-		username = infos[0]
-	}
-
-	log.WithContext(session.Ctx).Debugf("POP3 APOP %s %s", username, digest)
-
-	var user models.User
-
-	_, err := db.Instance.Where("account =? and disabled = 0", username).Get(&user)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.WithContext(session.Ctx.(*context.Context)).Errorf("%+v", err)
-	}
-
-	if user.ID > 0 && digest == password.Md5Encode(user.Password) {
-		session.User = username
-		session.Status = gopop.TRANSACTION
-
-		session.Ctx.(*context.Context).UserID = user.ID
-		session.Ctx.(*context.Context).UserName = user.Name
-		session.Ctx.(*context.Context).UserAccount = user.Account
-
-		return nil
-	}
-
-	return errors2.New("password error")
-
+	return errors2.New("APOP disabled; use TLS password authentication")
 }
 
 // Stat 查询邮件数量

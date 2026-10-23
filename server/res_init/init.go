@@ -1,8 +1,9 @@
 package res_init
 
 import (
-	"encoding/json"
 	"os"
+	osSignal "os/signal"
+	"syscall"
 	"time"
 
 	"fmt"
@@ -25,13 +26,21 @@ import (
 )
 
 func Init(serverVersion string) {
+	shutdown := make(chan os.Signal, 1)
+	osSignal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
+	defer osSignal.Stop(shutdown)
 
 	if !config.IsInit {
 		dirInit()
 
 		go http_server.SetupStart()
-		<-signal.InitChan
-		http_server.SetupStop()
+		select {
+		case <-signal.InitChan:
+			http_server.SetupStop()
+		case <-shutdown:
+			http_server.SetupStop()
+			return
+		}
 	}
 
 	for {
@@ -47,9 +56,13 @@ func Init(serverVersion string) {
 		session.Init()
 		hooks.Init(serverVersion)
 		// smtp server start
-		go smtp_server.Start()
-		go smtp_server.StartWithTLS()
-		go smtp_server.StartWithTLSNew()
+		if !config.Instance.DisableSMTP {
+			go smtp_server.Start()
+		}
+		if config.Instance.EnableSubmission {
+			go smtp_server.StartWithTLS()
+			go smtp_server.StartWithTLSNew()
+		}
 		// http server start
 		go http_server.HttpsStart()
 		go http_server.HttpStart()
@@ -61,13 +74,16 @@ func Init(serverVersion string) {
 		ssl.Update(false)
 
 		// pop3 server start
-		go pop3_server.Start()
-		go pop3_server.StartWithTls()
+		if config.Instance.EnablePOP3 {
+			go pop3_server.Start()
+			go pop3_server.StartWithTls()
+		}
 		// imap server start
-		go imap_server.StarTLS()
+		if config.Instance.EnableIMAP {
+			go imap_server.StarTLS()
+		}
 
-		configStr, _ := json.Marshal(config.Instance)
-		log.Warnf("Config File Info:  %s", configStr)
+		log.Info("Configured services started; configuration secrets are not logged")
 
 		select {
 		case <-signal.RestartChan:
@@ -78,6 +94,15 @@ func Init(serverVersion string) {
 			pop3_server.Stop()
 			imap_server.Stop()
 			hooks.Stop()
+		case <-shutdown:
+			log.Infof("Server Stop!")
+			smtp_server.Stop()
+			http_server.HttpsStop()
+			http_server.HttpStop()
+			pop3_server.Stop()
+			imap_server.Stop()
+			hooks.Stop()
+			return
 		case <-signal.StopChan:
 			log.Infof("Server Stop!")
 			smtp_server.Stop()

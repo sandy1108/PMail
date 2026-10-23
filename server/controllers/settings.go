@@ -5,6 +5,7 @@ import (
 	"github.com/Jinnrry/pmail/db"
 	"github.com/Jinnrry/pmail/dto/response"
 	"github.com/Jinnrry/pmail/i18n"
+	"github.com/Jinnrry/pmail/session"
 	"github.com/Jinnrry/pmail/utils/context"
 	"github.com/Jinnrry/pmail/utils/password"
 	log "github.com/sirupsen/logrus"
@@ -36,6 +37,7 @@ func ModifyPassword(ctx *context.Context, w http.ResponseWriter, req *http.Reque
 			return
 		}
 
+		session.Instance.Clear(req.Context())
 	}
 
 	response.NewSuccessResponse(i18n.GetText(ctx.Lang, "succ")).FPrint(w)

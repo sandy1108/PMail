@@ -3,6 +3,7 @@ package smtp_server
 import (
 	"database/sql"
 	"errors"
+	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/db"
 	"github.com/Jinnrry/pmail/models"
 	"github.com/Jinnrry/pmail/utils/context"
@@ -43,12 +44,17 @@ type Session struct {
 // AuthMechanisms returns a slice of available auth mechanisms
 // supported in this example.
 func (s *Session) AuthMechanisms() []string {
+	if !config.Instance.SMTPAuthEnabled {
+		return nil
+	}
 	return []string{sasl.Plain, sasl.Login}
 }
 
 // Auth is the handler for supported authenticators.
 func (s *Session) Auth(mech string) (sasl.Server, error) {
-	log.WithContext(s.Ctx).Debugf("Auth :%s", mech)
+	if !config.Instance.SMTPAuthEnabled {
+		return nil, errors.New("AUTH disabled")
+	}
 	if mech == sasl.Plain {
 		return sasl.NewPlainServer(func(identity, username, password string) error {
 			return s.AuthPlain(username, password)
@@ -65,35 +71,33 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 }
 
 func (s *Session) AuthPlain(username, pwd string) error {
-	log.WithContext(s.Ctx).Debugf("Auth %s %s", username, pwd)
+	if !config.Instance.SMTPAuthEnabled {
+		return errors.New("AUTH disabled")
+	}
 
 	s.User = username
 
 	var user models.User
-
-	encodePwd := password.Encode(pwd)
 
 	infos := strings.Split(username, "@")
 	if len(infos) > 1 {
 		username = infos[0]
 	}
 
-	_, err := db.Instance.Where("account =? and password =? and disabled=0", username, encodePwd).Get(&user)
+	_, err := db.Instance.Where("account =? and disabled=0", username).Get(&user)
 	if err != nil && err != sql.ErrNoRows {
 		log.Errorf("%+v", err)
 	}
 
-	if user.ID > 0 {
+	if user.ID > 0 && password.Verify(user.Password, pwd) {
 		s.Ctx.UserAccount = user.Account
 		s.Ctx.UserID = user.ID
 		s.Ctx.UserName = user.Name
 		s.Ctx.IsAdmin = user.IsAdmin == 1
 
-		log.WithContext(s.Ctx).Debugf("Auth Success %+v", user)
 		return nil
 	}
 
-	log.WithContext(s.Ctx).Debugf("登陆错误%s %s", username, pwd)
 	return errors.New("password error")
 }
 
@@ -106,11 +110,34 @@ func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	log.WithContext(s.Ctx).Debugf("Rcpt Success %+v", to)
 
+	// 入站只接收本域已启用账号，拒绝外域中继和未知用户。
+	parts := strings.Split(strings.ToLower(to), "@")
+	if len(parts) != 2 {
+		return &smtp.SMTPError{Code: 550, Message: "Invalid recipient"}
+	}
+	local := strings.EqualFold(parts[1], config.Instance.Domain)
+	for _, domain := range config.Instance.Domains {
+		if strings.EqualFold(parts[1], domain) {
+			local = true
+			break
+		}
+	}
+	if !local {
+		return &smtp.SMTPError{Code: 550, Message: "Relay denied"}
+	}
+	var user models.User
+	found, err := db.Instance.Where("account=? and disabled=0", parts[0]).Get(&user)
+	if err != nil {
+		return &smtp.SMTPError{Code: 451, Message: "Temporary recipient lookup failure"}
+	}
+	if !found {
+		return &smtp.SMTPError{Code: 550, Message: "Unknown recipient"}
+	}
 	s.To = append(s.To, to)
 	return nil
 }
 
-func (s *Session) Reset() {}
+func (s *Session) Reset() { s.From = ""; s.To = nil }
 
 func (s *Session) Logout() error {
 	return nil

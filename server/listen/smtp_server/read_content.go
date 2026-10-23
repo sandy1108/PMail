@@ -46,7 +46,7 @@ func (s *Session) Data(r io.Reader) error {
 		return err
 	}
 
-	log.WithContext(ctx).Debugf("%s", string(emailData))
+	// 邮件正文和附件不进入调试日志。
 
 	log.WithContext(ctx).Debugf("开始执行插件ReceiveParseBefore！")
 	for _, hook := range hooks.HookList {

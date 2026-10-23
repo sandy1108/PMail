@@ -75,10 +75,11 @@ func DialTls(addr, domain, fromDomain string) (*Client, error) {
 		domain = fromDomain
 	}
 
+	domain, _, _ = net.SplitHostPort(addr)
 	// TLS config
 	tlsconfig := &tls.Config{
-		InsecureSkipVerify: true,
-		ServerName:         domain,
+		MinVersion: tls.VersionTLS12,
+		ServerName: domain,
 	}
 
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 2 * time.Second}, "tcp", addr, tlsconfig)

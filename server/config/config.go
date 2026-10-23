@@ -13,8 +13,11 @@ import (
 	"github.com/Jinnrry/pmail/utils/errors"
 	"github.com/Jinnrry/pmail/utils/file"
 	log "github.com/sirupsen/logrus"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -22,6 +25,20 @@ import (
 var IsInit bool
 
 type Config struct {
+	HTTPBind             string   `json:"httpBind"`
+	SMTPBind             string   `json:"smtpBind"`
+	SMTPPort             int      `json:"smtpPort"`
+	SMTPHostname         string   `json:"smtpHostname"`
+	DisableSMTP          bool     `json:"disableSMTP"`
+	EnableSubmission     bool     `json:"enableSubmission"`
+	EnablePOP3           bool     `json:"enablePOP3"`
+	EnableIMAP           bool     `json:"enableIMAP"`
+	SMTPAuthEnabled      bool     `json:"smtpAuthEnabled"`
+	ProxyRequired        bool     `json:"proxyRequired"`
+	ProxyTrustedIPs      []string `json:"proxyTrustedIPs"`
+	WebOrigin            string   `json:"webOrigin"`
+	InsecureLocalCookies bool     `json:"insecureLocalCookies"`
+
 	LogLevel             string            `json:"logLevel"` // 日志级别
 	Domain               string            `json:"domain"`
 	Domains              []string          `json:"domains"` //多域名设置，把所有收信域名都填进去
@@ -146,9 +163,12 @@ func Init() {
 	}
 
 	err = json.Unmarshal(cfgData, &Instance)
-	Instance.fixPath()
 	if err != nil {
-		return
+		panic(err)
+	}
+	Instance.fixPath()
+	if err := Instance.Validate(); err != nil {
+		panic(err)
 	}
 
 	if len(Instance.Domains) == 0 && Instance.Domain != "" {
@@ -212,7 +232,7 @@ func createNewPrivateKey() *ecdsa.PrivateKey {
 	x509Encoded, _ := x509.MarshalECPrivateKey(privateKey)
 
 	// 将ec 密钥写入到 pem文件里
-	keypem, _ := os.OpenFile(ROOT_PATH+"./config/ssl/account_private.pem", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	keypem, _ := os.OpenFile(ROOT_PATH+"./config/ssl/account_private.pem", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	err = pem.Encode(keypem, &pem.Block{Type: "EC PRIVATE KEY", Bytes: x509Encoded})
 	if err != nil {
 		panic(err)
@@ -222,8 +242,8 @@ func createNewPrivateKey() *ecdsa.PrivateKey {
 
 func WriteConfig(cfg *Config) error {
 	bytes, _ := json.Marshal(cfg)
-	_ = os.MkdirAll(ROOT_PATH+"/config/", 0755)
-	err := os.WriteFile(ROOT_PATH+"./config/config.json", bytes, 0666)
+	_ = os.MkdirAll(ROOT_PATH+"/config/", 0700)
+	err := os.WriteFile(ROOT_PATH+"./config/config.json", bytes, 0600)
 	if err != nil {
 		return errors.Wrap(err)
 	}
@@ -238,8 +258,8 @@ func ReadConfig() (*Config, error) {
 	}
 	if !file.PathExist(ROOT_PATH + "./config/config.json") {
 		bytes, _ := json.Marshal(configData)
-		_ = os.MkdirAll(ROOT_PATH+"/config/", 0755)
-		err := os.WriteFile(ROOT_PATH+"./config/config.json", bytes, 0666)
+		_ = os.MkdirAll(ROOT_PATH+"/config/", 0700)
+		err := os.WriteFile(ROOT_PATH+"./config/config.json", bytes, 0600)
 		if err != nil {
 			log.Errorf("Write Config Error:%s", err.Error())
 			return nil, errors.Wrap(err)
@@ -271,4 +291,62 @@ func (c *Config) fixPath() {
 	if !strings.HasPrefix(c.SSLPrivateKeyPath, "/") {
 		c.SSLPrivateKeyPath = ROOT_PATH + c.SSLPrivateKeyPath
 	}
+}
+
+// Validate 在启动前拒绝无效监听与代理配置，防止静默回退到全网卡。
+func (c *Config) Validate() error {
+	if c.HTTPBind == "" {
+		c.HTTPBind = "127.0.0.1"
+	}
+	if c.SMTPBind == "" {
+		c.SMTPBind = "127.0.0.1"
+	}
+	if c.SMTPPort == 0 {
+		c.SMTPPort = 2525
+	}
+	if c.HttpPort == 0 {
+		c.HttpPort = 18080
+	}
+	for _, addr := range []string{c.HTTPBind, c.SMTPBind} {
+		if net.ParseIP(addr) == nil {
+			return fmt.Errorf("listener requires an IP address")
+		}
+	}
+	for _, port := range []int{c.HttpPort, c.SMTPPort} {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("invalid listener port")
+		}
+	}
+	if c.ProxyRequired && len(c.ProxyTrustedIPs) == 0 {
+		return fmt.Errorf("PROXY requires explicit trusted IPs")
+	}
+	for _, ip := range c.ProxyTrustedIPs {
+		if net.ParseIP(ip) == nil {
+			return fmt.Errorf("invalid trusted PROXY IP")
+		}
+	}
+	if c.IsInit {
+		origin, err := url.Parse(c.WebOrigin)
+		if err != nil || origin.Host == "" || (origin.Scheme != "https" && origin.Scheme != "http") || origin.Path != "" || origin.RawQuery != "" || origin.User != nil || origin.Fragment != "" {
+			return fmt.Errorf("webOrigin must be an explicit origin without path")
+		}
+		if c.InsecureLocalCookies {
+			ip := net.ParseIP(origin.Hostname())
+			if !net.ParseIP(c.HTTPBind).IsLoopback() || ip == nil || !ip.IsLoopback() || origin.Scheme != "http" {
+				return fmt.Errorf("insecure cookies only allowed for loopback HTTP testing")
+			}
+		} else if origin.Scheme != "https" {
+			return fmt.Errorf("secure deployment requires HTTPS origin")
+		}
+	}
+	if c.SMTPHostname == "" {
+		c.SMTPHostname = c.WebDomain
+	}
+	if c.SMTPHostname == "" {
+		c.SMTPHostname = c.Domain
+	}
+	return nil
+}
+func (c *Config) HTTPAddress(port int) string {
+	return net.JoinHostPort(c.HTTPBind, strconv.Itoa(port))
 }

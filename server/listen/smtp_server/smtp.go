@@ -2,6 +2,9 @@ package smtp_server
 
 import (
 	"crypto/tls"
+	"errors"
+	"net"
+	"strconv"
 	"time"
 
 	"github.com/Jinnrry/pmail/config"
@@ -33,7 +36,7 @@ func StartWithTLSNew() {
 		return
 	}
 	// Configure the TLS support for STARTTLS
-	instanceTlsNew.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
+	instanceTlsNew.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}, MinVersion: tls.VersionTLS12}
 
 	log.Println("Starting Smtp With STARTTLS Server Port:", instanceTlsNew.Addr)
 	// 587端口使用STARTTLS（先明文连接，再升级TLS），而非隐式TLS
@@ -62,7 +65,7 @@ func StartWithTLS() {
 		return
 	}
 	// Configure the TLS support
-	instanceTls.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
+	instanceTls.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}, MinVersion: tls.VersionTLS12}
 
 	log.Println("Starting Smtp With SSL Server Port:", instanceTls.Addr)
 	if err := instanceTls.ListenAndServeTLS(); err != nil {
@@ -75,8 +78,8 @@ func Start() {
 
 	instance = smtp.NewServer(be)
 
-	instance.Addr = ":25"
-	instance.Domain = config.Instance.Domain
+	instance.Addr = net.JoinHostPort(config.Instance.SMTPBind, strconv.Itoa(config.Instance.SMTPPort))
+	instance.Domain = config.Instance.SMTPHostname
 	instance.ReadTimeout = 10 * time.Second
 	instance.WriteTimeout = 10 * time.Second
 	instance.MaxMessageBytes = 1024 * 1024 * 30
@@ -90,11 +93,19 @@ func Start() {
 		return
 	}
 	// Configure the TLS support
-	instance.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}}
+	instance.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}, MinVersion: tls.VersionTLS12}
 
 	log.Println("Starting Smtp Server Port:", instance.Addr)
-	if err := instance.ListenAndServe(); err != nil {
+	listener, err := net.Listen("tcp", instance.Addr)
+	if err != nil {
 		log.Fatal(err)
+		return
+	}
+	if config.Instance.ProxyRequired {
+		listener = proxyListener(listener, config.Instance.ProxyTrustedIPs, 3*time.Second)
+	}
+	if err := instance.Serve(listener); err != nil && !errors.Is(err, smtp.ErrServerClosed) {
+		log.Error(err)
 	}
 }
 

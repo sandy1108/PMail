@@ -15,9 +15,9 @@ const http = axios.create({
 
 //请求拦截器
 http.interceptors.request.use((config) => {
-    //若请求方式为post，则将data参数转为JSON字符串
-    if (config.method === 'POST') {
-        config.data = JSON.stringify(config.data);
+    // Axios会将方法转为小写；空POST补齐JSON对象，避免浏览器移除Content-Type后被安全校验拒绝。
+    if (config.method?.toLowerCase() === 'post' && config.data === undefined) {
+        config.data = {};
     }
     return config;
 }, (error) =>

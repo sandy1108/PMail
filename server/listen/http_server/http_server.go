@@ -2,7 +2,6 @@ package http_server
 
 import (
 	"errors"
-	"fmt"
 	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/controllers"
 	"github.com/Jinnrry/pmail/controllers/email"
@@ -72,7 +71,7 @@ func HttpStart() {
 		mux.HandleFunc("/api/ping", controllers.Ping)
 		mux.HandleFunc("/", controllers.Interceptor)
 		httpServer = &http.Server{
-			Addr:         fmt.Sprintf(":%d", HttpPort),
+			Addr:         config.Instance.HTTPAddress(HttpPort),
 			Handler:      mux,
 			ReadTimeout:  time.Second * 90,
 			WriteTimeout: time.Second * 90,
@@ -83,7 +82,7 @@ func HttpStart() {
 
 		log.Infof("HttpServer Start On Port :%d", HttpPort)
 		httpServer = &http.Server{
-			Addr:         fmt.Sprintf(":%d", HttpPort),
+			Addr:         config.Instance.HTTPAddress(HttpPort),
 			Handler:      session.Instance.LoadAndSave(mux),
 			ReadTimeout:  time.Second * 90,
 			WriteTimeout: time.Second * 90,

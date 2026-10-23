@@ -3,7 +3,6 @@ package http_server
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/controllers"
 	"github.com/Jinnrry/pmail/utils/ip"
@@ -19,6 +18,9 @@ import (
 var setupServer *http.Server
 
 func SetupStart() {
+	if err := config.Instance.Validate(); err != nil {
+		panic(err)
+	}
 	mux := http.NewServeMux()
 	fe, err := fs.Sub(local, "dist")
 	if err != nil {
@@ -30,7 +32,7 @@ func SetupStart() {
 	mux.HandleFunc("/.well-known/", controllers.AcmeChallenge)
 
 	HttpPort := 80
-	flag.IntVar(&HttpPort, "p", 80, "初始化阶段Http服务端口")
+	flag.IntVar(&HttpPort, "p", 18081, "初始化阶段Http服务端口")
 	flag.Parse()
 
 	if HttpPort == 80 {
@@ -50,7 +52,7 @@ func SetupStart() {
 	}
 
 	setupServer = &http.Server{
-		Addr:         fmt.Sprintf(":%d", HttpPort),
+		Addr:         config.Instance.HTTPAddress(HttpPort),
 		Handler:      mux,
 		ReadTimeout:  time.Second * 60,
 		WriteTimeout: time.Second * 60,
