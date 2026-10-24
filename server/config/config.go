@@ -25,6 +25,10 @@ import (
 var IsInit bool
 
 type Config struct {
+	IMAPBind             string   `json:"imapBind"`
+	IMAPPort             int      `json:"imapPort"`
+	POP3Bind             string   `json:"pop3Bind"`
+	POP3Port             int      `json:"pop3Port"`
 	HTTPBind             string   `json:"httpBind"`
 	SMTPBind             string   `json:"smtpBind"`
 	SMTPPort             int      `json:"smtpPort"`
@@ -295,6 +299,24 @@ func (c *Config) fixPath() {
 
 // Validate 在启动前拒绝无效监听与代理配置，防止静默回退到全网卡。
 func (c *Config) Validate() error {
+	if c.IMAPBind == "" {
+		c.IMAPBind = "127.0.0.1"
+	}
+	if c.POP3Bind == "" {
+		c.POP3Bind = "127.0.0.1"
+	}
+	if c.IMAPPort == 0 {
+		c.IMAPPort = 1993
+	}
+	if c.POP3Port == 0 {
+		c.POP3Port = 1995
+	}
+	if net.ParseIP(c.IMAPBind) == nil || net.ParseIP(c.POP3Bind) == nil || c.IMAPPort < 1024 || c.IMAPPort > 65535 || c.POP3Port < 1024 || c.POP3Port > 65535 {
+		return fmt.Errorf("invalid client TLS listener; use explicit IP and unprivileged port")
+	}
+	if c.EnableIMAP && c.EnablePOP3 && c.IMAPBind == c.POP3Bind && c.IMAPPort == c.POP3Port {
+		return fmt.Errorf("client TLS listener conflict")
+	}
 	if c.HTTPBind == "" {
 		c.HTTPBind = "127.0.0.1"
 	}
@@ -315,6 +337,20 @@ func (c *Config) Validate() error {
 	for _, port := range []int{c.HttpPort, c.SMTPPort} {
 		if port < 1 || port > 65535 {
 			return fmt.Errorf("invalid listener port")
+		}
+	}
+	// 对同一地址或通配地址的端口复用提前失败，避免只启动部分服务。
+	type endpoint struct {
+		bind    string
+		port    int
+		enabled bool
+	}
+	endpoints := []endpoint{{c.HTTPBind, c.HttpPort, true}, {c.SMTPBind, c.SMTPPort, !c.DisableSMTP}, {c.IMAPBind, c.IMAPPort, c.EnableIMAP}, {c.POP3Bind, c.POP3Port, c.EnablePOP3}}
+	for i, a := range endpoints {
+		for _, b := range endpoints[i+1:] {
+			if a.enabled && b.enabled && a.port == b.port && (a.bind == b.bind || net.ParseIP(a.bind).IsUnspecified() || net.ParseIP(b.bind).IsUnspecified()) {
+				return fmt.Errorf("listener port conflict")
+			}
 		}
 	}
 	if c.ProxyRequired && len(c.ProxyTrustedIPs) == 0 {

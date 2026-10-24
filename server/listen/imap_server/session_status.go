@@ -1,40 +1,27 @@
 package imap_server
 
 import (
-	"github.com/Jinnrry/pmail/services/group"
 	"github.com/emersion/go-imap/v2"
-	"github.com/spf13/cast"
 )
 
 func (s *serverSession) Status(mailbox string, options *imap.StatusOptions) (*imap.StatusData, error) {
-	category := []string{}
-	if options.UIDNext {
-		category = append(category, "UIDNEXT")
+	if err := s.authorize(); err != nil {
+		return nil, err
 	}
-	if options.NumMessages {
-		category = append(category, "MESSAGES")
+	rows, valid, err := s.mailboxRows(mailbox)
+	if err != nil {
+		return nil, err
 	}
-	if options.UIDValidity {
-		category = append(category, "UIDVALIDITY")
-	}
-	if options.NumUnseen {
-		category = append(category, "UNSEEN")
+	next, err := nextUID()
+	if err != nil {
+		return nil, err
 	}
 
-	_, data := group.GetGroupStatus(s.ctx, mailbox, category)
-
-	numMessages := cast.ToUint32(data["MESSAGES"])
-	numUnseen := cast.ToUint32(data["UNSEEN"])
-	numValidity := cast.ToUint32(data["UIDVALIDITY"])
-	numUIDNext := cast.ToUint32(data["UIDNEXT"])
-
-	ret := &imap.StatusData{
-		Mailbox:     mailbox,
-		NumMessages: &numMessages,
-		UIDNext:     imap.UID(numUIDNext),
-		UIDValidity: numValidity,
-		NumUnseen:   &numUnseen,
+	count, unseen := uint32(len(rows)), uint32(0)
+	for _, r := range rows {
+		if r.IsRead == 0 {
+			unseen++
+		}
 	}
-
-	return ret, nil
+	return &imap.StatusData{Mailbox: mailbox, NumMessages: &count, NumUnseen: &unseen, UIDNext: next, UIDValidity: valid}, nil
 }

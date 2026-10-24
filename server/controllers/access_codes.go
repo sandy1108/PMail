@@ -36,13 +36,18 @@ func accessCodeError(w http.ResponseWriter, err error) {
 func CreateAccessCode(ctx *context.Context, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	var req struct {
-		Name      string `json:"name"`
-		ExpiresAt int64  `json:"expires_at"`
+		Name        string    `json:"name"`
+		ExpiresAt   int64     `json:"expires_at"`
+		Permissions *[]string `json:"permissions"`
 	}
 	if !decodeAccessCodeRequest(w, r, &req) {
 		return
 	}
-	code, token, err := accesscode.Create(ctx.UserID, req.Name, req.ExpiresAt, session.Instance.GetString(ctx, "credential"))
+	permissions := []string{"http.read"}
+	if req.Permissions != nil {
+		permissions = *req.Permissions
+	}
+	code, token, err := accesscode.CreateWithPermissions(ctx.UserID, req.Name, req.ExpiresAt, session.Instance.GetString(ctx, "credential"), permissions)
 	if err != nil {
 		accessCodeError(w, err)
 		return
@@ -74,6 +79,23 @@ func RevokeAccessCode(ctx *context.Context, w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := accesscode.Revoke(ctx.UserID, req.ID); err != nil {
+		accessCodeError(w, err)
+		return
+	}
+	response.NewSuccessResponse(true).FPrint(w)
+}
+
+// UpdateAccessCode仅在网页中调整当前用户的用途，不接收明文密钥或用户ID。
+func UpdateAccessCode(ctx *context.Context, w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	var req struct {
+		ID          int64    `json:"id"`
+		Permissions []string `json:"permissions"`
+	}
+	if !decodeAccessCodeRequest(w, r, &req) {
+		return
+	}
+	if err := accesscode.UpdatePermissions(ctx.UserID, req.ID, req.Permissions, session.Instance.GetString(ctx, "credential")); err != nil {
 		accessCodeError(w, err)
 		return
 	}

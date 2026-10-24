@@ -9,7 +9,6 @@ import (
 	"github.com/Jinnrry/pmail/services/group"
 	"github.com/Jinnrry/pmail/utils/array"
 	"github.com/Jinnrry/pmail/utils/context"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 )
@@ -63,13 +62,9 @@ type addGroupRequest struct {
 
 func AddGroup(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
 	var reqData *addGroupRequest
-	reqBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
-	}
-	err = json.Unmarshal(reqBytes, &reqData)
-	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
+	if err := json.NewDecoder(io.LimitReader(req.Body, 4096)).Decode(&reqData); err != nil || reqData == nil || reqData.Name == "" || reqData.ParentId < 0 {
+		response.NewErrorResponse(response.ParamsError, "Invalid request", "").FPrint(w)
+		return
 	}
 
 	newGroup, err := group.CreateGroup(ctx, reqData.Name, reqData.ParentId)
@@ -88,14 +83,11 @@ type delGroupRequest struct {
 
 func DelGroup(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
 	var reqData *delGroupRequest
-	reqBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
+	if err := json.NewDecoder(io.LimitReader(req.Body, 4096)).Decode(&reqData); err != nil || reqData == nil || reqData.Id <= 0 {
+		response.NewErrorResponse(response.ParamsError, "Invalid request", "").FPrint(w)
+		return
 	}
-	err = json.Unmarshal(reqBytes, &reqData)
-	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
-	}
+
 	succ, err := group.DelGroup(ctx, reqData.Id)
 
 	if err != nil {

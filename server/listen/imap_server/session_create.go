@@ -7,6 +7,9 @@ import (
 )
 
 func (s *serverSession) Create(mailbox string, options *imap.CreateOptions) error {
+	if err := s.authorize(); err != nil {
+		return err
+	}
 	groupPath := strings.Split(mailbox, "/")
 
 	var parentId int

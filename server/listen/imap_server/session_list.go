@@ -73,7 +73,7 @@ func matchGroup(ctx *context.Context, w *imapserver.ListWriter, basePath, patter
 
 func hasChildren(ctx *context.Context, id int) bool {
 	var parent []*models.Group
-	db.Instance.Table("group").Where("parent_id=?", id).Find(&parent)
+	db.Instance.Table("group").Where("parent_id=? AND user_id=?", id, ctx.UserID).Find(&parent)
 	return len(parent) > 0
 }
 func getLayerName(ctx *context.Context, item *models.Group, allPath bool) string {
@@ -81,7 +81,7 @@ func getLayerName(ctx *context.Context, item *models.Group, allPath bool) string
 		return item.Name
 	}
 	var parent models.Group
-	_, _ = db.Instance.Table("group").Where("id=?", item.ParentId).Get(&parent)
+	_, _ = db.Instance.Table("group").Where("id=? AND user_id=?", item.ParentId, ctx.UserID).Get(&parent)
 	if allPath {
 		return getLayerName(ctx, &parent, allPath) + "/" + item.Name
 	}
@@ -89,6 +89,9 @@ func getLayerName(ctx *context.Context, item *models.Group, allPath bool) string
 }
 
 func (s *serverSession) List(w *imapserver.ListWriter, ref string, patterns []string, options *imap.ListOptions) error {
+	if err := s.authorize(); err != nil {
+		return err
+	}
 	log.WithContext(s.ctx).Debugf("imap server list, ref: %s ,patterns: %s ", ref, patterns)
 
 	if ref == "" && len(patterns) == 0 {

@@ -2,10 +2,15 @@ package imap_server
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"crypto/tls"
+	"fmt"
 	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/db"
+	"github.com/Jinnrry/pmail/internal/testcert"
 	"github.com/Jinnrry/pmail/models"
+	"github.com/Jinnrry/pmail/services/accesscode"
+	"github.com/Jinnrry/pmail/services/protocolsecurity"
 	"github.com/Jinnrry/pmail/utils/array"
 	pcontext "github.com/Jinnrry/pmail/utils/context"
 	"github.com/Jinnrry/pmail/utils/password"
@@ -23,23 +28,31 @@ import (
 var clientUnLogin *imapclient.Client
 var clientLogin *imapclient.Client
 var imapTestAddr string
+var imapTestToken string
+var imapTestTLS *tls.Config
 
 func TestMain(m *testing.M) {
-	wd, err := os.Getwd()
+	dir, err := os.MkdirTemp("", "pmail-imap-")
 	if err != nil {
 		panic(err)
 	}
-	config.ROOT_PATH = filepath.Clean(filepath.Join(wd, "../..")) + string(os.PathSeparator)
-	config.Init()
-	if err := db.Init(""); err != nil {
+	crt, clientTLS, certPath, keyPath, err := testcert.Create(dir)
+	if err != nil {
+		panic(err)
+	}
+	imapTestTLS = clientTLS
+	config.Instance = &config.Config{Domain: "example.com", DbType: config.DBTypeSQLite, DbDSN: filepath.Join(dir, "mail.db"), SSLPublicKeyPath: certPath, SSLPrivateKeyPath: keyPath, LogLevel: "warn"}
+	if err = db.Init(""); err != nil {
 		panic(err)
 	}
 	seedIMAPTestData()
-	crt, err := tls.LoadX509KeyPair(config.Instance.SSLPublicKeyPath, config.Instance.SSLPrivateKeyPath)
+	var user models.User
+	db.Instance.Where("account=?", "testcase").Get(&user)
+	_, imapTestToken, err = accesscode.CreateWithPermissions(user.ID, "test", 0, fmt.Sprintf("%x", sha256.Sum256([]byte(user.Password))), []string{"imap"})
 	if err != nil {
 		panic(err)
 	}
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{crt}})
+	ln, err := protocolsecurity.ListenTLS("127.0.0.1", 0, crt)
 	if err != nil {
 		panic(err)
 	}
@@ -47,15 +60,13 @@ func TestMain(m *testing.M) {
 	instanceTLS = newIMAPServer()
 	go func() {
 		if err := instanceTLS.Serve(ln); err != nil {
-			panic(err)
+			// Listener is closed during cleanup.
 		}
 	}()
 
 	options := &imapclient.Options{
 		WordDecoder: &mime.WordDecoder{CharsetReader: charset.Reader},
-		TLSConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+		TLSConfig:   imapTestTLS,
 	}
 
 	clientUnLogin, err = imapclient.DialTLS(imapTestAddr, options)
@@ -68,7 +79,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 
-	err = clientLogin.Login("testCase", "testCase").Wait()
+	err = clientLogin.Login("testcase@example.com", imapTestToken).Wait()
 	if err != nil {
 		panic(err)
 	}
@@ -77,17 +88,19 @@ func TestMain(m *testing.M) {
 	clientUnLogin.Close()
 	clientLogin.Close()
 	Stop()
+	db.Instance.Close()
+	os.RemoveAll(dir)
 	os.Exit(code)
 }
 
 func seedIMAPTestData() {
 	var user models.User
-	_, err := db.Instance.Table(&models.User{}).Where("account=?", "testCase").Get(&user)
+	_, err := db.Instance.Table(&models.User{}).Where("account=?", "testcase").Get(&user)
 	if err != nil {
 		panic(err)
 	}
 	if user.ID == 0 {
-		user = models.User{Account: "testCase", Name: "testCase", Password: password.Encode("testCase")}
+		user = models.User{Account: "testcase", Name: "testcase", Password: password.Encode("testcase")}
 		if _, err = db.Instance.Insert(&user); err != nil {
 			panic(err)
 		}
@@ -139,7 +152,7 @@ func TestCapability(t *testing.T) {
 }
 
 func TestLogin(t *testing.T) {
-	err := clientUnLogin.Login("testCase", "testCaseasdfsadf").Wait()
+	err := clientUnLogin.Login("testcase", "testCaseasdfsadf").Wait()
 	sErr := err.(*imap.Error)
 	if sErr.Code != "AUTHENTICATIONFAILED" {
 		t.Error("Login Error")
@@ -188,7 +201,7 @@ func TestRename(t *testing.T) {
 		mailbox = append(mailbox, v.Mailbox)
 	}
 
-	if !array.InArray("主菜单", mailbox) {
+	if !array.InArray("主菜单", mailbox) || !array.InArray("主菜单/二级菜单", mailbox) {
 		t.Error(mailbox)
 	}
 }
@@ -217,7 +230,7 @@ func TestList(t *testing.T) {
 		t.Error("List Error")
 	}
 
-	res, err = clientLogin.List("", "一级菜单/%", &imap.ListOptions{}).Collect()
+	res, err = clientLogin.List("", "主菜单/%", &imap.ListOptions{}).Collect()
 	if err != nil {
 		t.Error(err)
 	}
@@ -229,7 +242,7 @@ func TestList(t *testing.T) {
 		t.Error("List Error")
 	}
 
-	res, err = clientLogin.List("", "一级菜单/*", &imap.ListOptions{}).Collect()
+	res, err = clientLogin.List("", "主菜单/*", &imap.ListOptions{}).Collect()
 	if err != nil {
 		t.Error(err)
 	}
@@ -246,7 +259,7 @@ func TestDelete(t *testing.T) {
 
 	clientLogin.Create("一级菜单/二级菜单", nil).Wait()
 
-	err := clientLogin.Delete("二级菜单").Wait()
+	err := clientLogin.Delete("一级菜单/二级菜单").Wait()
 	if err != nil {
 		t.Error(err)
 	}
@@ -397,21 +410,18 @@ func TestClose(t *testing.T) {
 
 }
 func TestExpunge(t *testing.T) {
-
-	clientLogin.Select("INBOX", &imap.SelectOptions{}).Wait()
-
-	res, err := clientLogin.UIDExpunge(imap.UIDSetNum(1, 2)).Collect()
-
+	clientLogin.Select("INBOX", nil).Wait()
+	before, err := db.Instance.Count(&models.UserEmail{})
 	if err != nil {
-		t.Errorf("%+v", err)
+		t.Fatal(err)
 	}
-	t.Logf("%+v", res)
-	var ues []models.UserEmail
-	db.Instance.Table("user_email").Where("id=1 or id=2").Find(&ues)
-	if len(ues) > 0 {
-		t.Errorf("TestExpunge Error")
+	if _, err = clientLogin.UIDExpunge(imap.UIDSetNum(1, 2)).Collect(); err != nil {
+		t.Fatal(err)
 	}
-
+	after, err := db.Instance.Count(&models.UserEmail{})
+	if err != nil || before != after {
+		t.Fatal("unmarked messages expunged", err)
+	}
 }
 func TestExamine(t *testing.T) {
 
@@ -522,7 +532,7 @@ func TestNoop(t *testing.T) {
 	}
 }
 func TestIDLE(t *testing.T) {
-	conn, err := tls.Dial("tcp", imapTestAddr, &tls.Config{InsecureSkipVerify: true})
+	conn, err := tls.Dial("tcp", imapTestAddr, imapTestTLS)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +547,7 @@ func TestIDLE(t *testing.T) {
 		t.Fatalf("unexpected greeting: %s", line)
 	}
 
-	if _, err = conn.Write([]byte("a001 LOGIN testCase testCase\r\n")); err != nil {
+	if _, err = conn.Write([]byte("a001 LOGIN testcase@example.com " + imapTestToken + "\r\n")); err != nil {
 		t.Fatal(err)
 	}
 	if line, err = readTaggedLine(reader, "a001"); err != nil {
@@ -583,9 +593,7 @@ func TestIdleNotice(t *testing.T) {
 	updates := make(chan uint32, 1)
 	options := &imapclient.Options{
 		WordDecoder: &mime.WordDecoder{CharsetReader: charset.Reader},
-		TLSConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+		TLSConfig:   imapTestTLS,
 		UnilateralDataHandler: &imapclient.UnilateralDataHandler{
 			Mailbox: func(data *imapclient.UnilateralDataMailbox) {
 				if data.NumMessages != nil {
@@ -601,7 +609,7 @@ func TestIdleNotice(t *testing.T) {
 	}
 	defer client.Close()
 
-	if err = client.Login("testCase", "testCase").Wait(); err != nil {
+	if err = client.Login("testcase@example.com", imapTestToken).Wait(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -616,7 +624,7 @@ func TestIdleNotice(t *testing.T) {
 	}
 
 	var user models.User
-	_, err = db.Instance.Table(&models.User{}).Where("account=?", "testCase").Get(&user)
+	_, err = db.Instance.Table(&models.User{}).Where("account=?", "testcase").Get(&user)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -624,15 +632,30 @@ func TestIdleNotice(t *testing.T) {
 		t.Fatal("test user not found")
 	}
 
+	// IDLE continuation由库先发出，等待后台完成注册再模拟新邮件通知。
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := userConnects.Load(user.ID); ok {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	ctx := &pcontext.Context{UserID: user.ID}
-	if err = IdleNotice(ctx, user.ID, &models.Email{Id: 1}); err != nil {
+	newMail := models.Email{Subject: "arrived"}
+	if _, err = db.Instance.Insert(&newMail); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Instance.Insert(&models.UserEmail{UserID: user.ID, EmailID: newMail.Id}); err != nil {
+		t.Fatal(err)
+	}
+	if err = IdleNotice(ctx, user.ID, &newMail); err != nil {
 		t.Fatal(err)
 	}
 
 	select {
 	case numMessages := <-updates:
-		if numMessages != selected.NumMessages {
-			t.Fatalf("unexpected IDLE EXISTS update: got %d, want %d", numMessages, selected.NumMessages)
+		if numMessages != selected.NumMessages+1 {
+			t.Fatalf("unexpected IDLE EXISTS update: got %d, want %d", numMessages, selected.NumMessages+1)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout waiting for IDLE update")

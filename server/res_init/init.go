@@ -75,7 +75,6 @@ func Init(serverVersion string) {
 
 		// pop3 server start
 		if config.Instance.EnablePOP3 {
-			go pop3_server.Start()
 			go pop3_server.StartWithTls()
 		}
 		// imap server start

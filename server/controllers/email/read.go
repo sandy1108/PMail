@@ -5,7 +5,6 @@ import (
 	"github.com/Jinnrry/pmail/dto/response"
 	"github.com/Jinnrry/pmail/services/detail"
 	"github.com/Jinnrry/pmail/utils/context"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 )
@@ -15,14 +14,11 @@ type markReadRequest struct {
 }
 
 func MarkRead(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
-	reqBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
-	}
 	var reqData markReadRequest
-	err = json.Unmarshal(reqBytes, &reqData)
+	err := json.NewDecoder(io.LimitReader(req.Body, 65536)).Decode(&reqData)
 	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
+		response.NewErrorResponse(response.ParamsError, "Invalid request", "").FPrint(w)
+		return
 	}
 
 	if len(reqData.IDs) <= 0 {
@@ -31,7 +27,10 @@ func MarkRead(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
 	}
 
 	for _, id := range reqData.IDs {
-		detail.GetEmailDetail(ctx, id, true)
+		_, err = detail.GetEmailDetail(ctx, id, true)
+		if err != nil {
+			break
+		}
 	}
 
 	if err != nil {

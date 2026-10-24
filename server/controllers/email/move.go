@@ -6,7 +6,6 @@ import (
 	"github.com/Jinnrry/pmail/models"
 	"github.com/Jinnrry/pmail/services/group"
 	"github.com/Jinnrry/pmail/utils/context"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 )
@@ -18,14 +17,11 @@ type moveRequest struct {
 }
 
 func Move(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
-	reqBytes, err := io.ReadAll(req.Body)
-	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
-	}
 	var reqData moveRequest
-	err = json.Unmarshal(reqBytes, &reqData)
+	err := json.NewDecoder(io.LimitReader(req.Body, 65536)).Decode(&reqData)
 	if err != nil {
-		log.WithContext(ctx).Errorf("%+v", err)
+		response.NewErrorResponse(response.ParamsError, "Invalid request", "").FPrint(w)
+		return
 	}
 
 	if len(reqData.IDs) <= 0 {

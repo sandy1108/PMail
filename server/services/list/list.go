@@ -134,7 +134,7 @@ type ImapListReq struct {
 
 func GetUEListByUID(ctx *context.Context, groupName string, star, end int, uidList []int) []*response.UserEmailUIDData {
 	var ue []*response.UserEmailUIDData
-	sql := "SELECT id,email_id, is_read, ROW_NUMBER() OVER (ORDER BY id) AS serial_number FROM `user_email` WHERE user_id = ? "
+	sql := "SELECT id,email_id, is_read, imap_deleted, status, ROW_NUMBER() OVER (ORDER BY id) AS serial_number FROM `user_email` WHERE user_id = ? "
 
 	params := []any{ctx.UserID}
 
@@ -152,26 +152,24 @@ func GetUEListByUID(ctx *context.Context, groupName string, star, end int, uidLi
 
 	switch groupName {
 	case "INBOX":
-		sql += " and status =?"
+		sql += " and group_id=0 and status =?"
 		params = append(params, 0)
 	case "Sent Messages":
-		sql += " and status =?"
+		sql += " and group_id=0 and status =?"
 		params = append(params, 1)
 	case "Drafts":
-		sql += " and status =?"
+		sql += " and group_id=0 and status =?"
 		params = append(params, 4)
 	case "Deleted Messages":
-		sql += " and status =?"
+		sql += " and group_id=0 and status =?"
 		params = append(params, 3)
 	case "Junk":
-		sql += " and status =?"
+		sql += " and group_id=0 and status =?"
 		params = append(params, 5)
 	default:
-		groupNames := strings.Split(groupName, "/")
-		groupName = groupNames[len(groupNames)-1]
 
 		var group models.Group
-		db.Instance.Table("group").Where("user_id=? and name=?", ctx.UserID, groupName).Get(&group)
+		db.Instance.Table("group").Where("user_id=? and full_path=?", ctx.UserID, groupName).Get(&group)
 		if group.ID == 0 {
 			return nil
 		}

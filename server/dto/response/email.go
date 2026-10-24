@@ -7,6 +7,7 @@ import (
 
 type EmailResponseData struct {
 	models.Email      `xorm:"extends"`
+	IMAPDeleted       bool     `xorm:"-" json:"-"`
 	DeliveryAddresses []string `xorm:"-" json:"delivery_addresses"`
 	IsRead            int8     `json:"is_read"`
 	SerialNumber      int      `json:"serial_number"`

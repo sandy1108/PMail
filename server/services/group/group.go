@@ -10,10 +10,10 @@ import (
 	"github.com/Jinnrry/pmail/services/del_email"
 	"github.com/Jinnrry/pmail/utils/array"
 	"github.com/Jinnrry/pmail/utils/context"
-	"github.com/Jinnrry/pmail/utils/errors"
 	log "github.com/sirupsen/logrus"
 	"strings"
 	"xorm.io/builder"
+	"xorm.io/xorm"
 )
 
 type GroupItem struct {
@@ -24,9 +24,24 @@ type GroupItem struct {
 }
 
 func CreateGroup(ctx *context.Context, name string, parentId int) (*models.Group, error) {
-	// 先查询是否存在
+	name = strings.TrimSpace(name)
+	if name == "" || strings.ContainsAny(name, "/\r\n") || parentId < 0 {
+		return nil, errors2.New("invalid folder")
+	}
+	if parentId > 0 {
+		ok, err := db.Instance.ID(parentId).Where("user_id=?", ctx.UserID).Exist(&models.Group{})
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errors2.New("parent folder unavailable")
+		}
+	}
 	var group models.Group
-	db.Instance.Table("group").Where("name = ? and user_id = ?", name, ctx.UserID).Get(&group)
+	_, err := db.Instance.Where("name=? AND user_id=? AND parent_id=?", name, ctx.UserID, parentId).Get(&group)
+	if err != nil {
+		return nil, err
+	}
 	if group.ID > 0 {
 		return &group, nil
 	}
@@ -35,29 +50,70 @@ func CreateGroup(ctx *context.Context, name string, parentId int) (*models.Group
 	group.UserId = ctx.UserID
 	group.FullPath = getLayerName(ctx, &group, true)
 
-	_, err := db.Instance.Insert(&group)
+	_, err = db.Instance.Insert(&group)
 	return &group, err
 }
 
-func Rename(ctx *context.Context, oldName, newName string) error {
-	oldGroupInfo, err := GetGroupByName(ctx, oldName)
+// Rename以完整路径定位，并在同一事务中更新子目录路径，禁止循环嵌套和覆盖。
+func Rename(ctx *context.Context, oldPath, newPath string) error {
+	old, err := GetGroupByFullPath(ctx, oldPath)
 	if err != nil {
 		return err
 	}
-	if oldGroupInfo == nil || oldGroupInfo.ID == 0 {
-		return errors2.New("group not found")
+	if old.ID == 0 {
+		return errors2.New("folder unavailable")
 	}
-	oldGroupInfo.Name = newName
-	oldGroupInfo.FullPath = getLayerName(ctx, oldGroupInfo, true)
-	_, err = db.Instance.ID(oldGroupInfo.ID).Update(oldGroupInfo)
-	return err
+	if newPath == oldPath {
+		return nil
+	}
+	if newPath == "" || strings.ContainsAny(newPath, "\r\n") || strings.HasPrefix(newPath, oldPath+"/") || IsDefaultBox(newPath) {
+		return errors2.New("invalid folder path")
+	}
+	if existing, err := GetGroupByFullPath(ctx, newPath); err != nil {
+		return err
+	} else if existing.ID > 0 {
+		return errors2.New("folder exists")
+	}
+	parts := strings.Split(newPath, "/")
+	name := parts[len(parts)-1]
+	if name == "" {
+		return errors2.New("invalid folder path")
+	}
+	parentID := 0
+	if len(parts) > 1 {
+		parent, err := GetGroupByFullPath(ctx, strings.Join(parts[:len(parts)-1], "/"))
+		if err != nil {
+			return err
+		}
+		if parent.ID == 0 {
+			return errors2.New("parent unavailable")
+		}
+		parentID = parent.ID
+	}
+	groups := GetGroupList(ctx)
+	return db.Transaction(db.Instance, func(tx *xorm.Session) error {
+		for _, g := range groups {
+			if g.ID == old.ID {
+				g.Name = name
+				g.FullPath = newPath
+				g.ParentId = parentID
+			} else if strings.HasPrefix(g.FullPath, oldPath+"/") {
+				g.FullPath = newPath + strings.TrimPrefix(g.FullPath, oldPath)
+			} else {
+				continue
+			}
+			if _, err := tx.ID(g.ID).Where("user_id=?", ctx.UserID).Cols("name", "full_path", "parent_id").Update(g); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func GetGroupByName(ctx *context.Context, name string) (*models.Group, error) {
 	var group models.Group
-	db.Instance.Table("group").Where("name = ? and user_id = ?", name, ctx.UserID).Get(&group)
-
-	return &group, nil
+	_, err := db.Instance.Table("group").Where("name = ? and user_id = ?", name, ctx.UserID).Get(&group)
+	return &group, err
 }
 
 func GetGroupByFullPath(ctx *context.Context, fullPath string) (*models.Group, error) {
@@ -68,32 +124,22 @@ func GetGroupByFullPath(ctx *context.Context, fullPath string) (*models.Group, e
 }
 
 func DelGroup(ctx *context.Context, groupId int) (bool, error) {
-	allGroupIds := getAllChildId(ctx, groupId)
-	allGroupIds = append(allGroupIds, groupId)
-
-	// 开启一个事务
-	trans := db.Instance.NewSession()
-
-	res, err := trans.Exec(db.WithContext(ctx, fmt.Sprintf("delete from `group` where id in (%s) and user_id =?", array.Join(allGroupIds, ","))), ctx.UserID)
+	ok, err := db.Instance.ID(groupId).Where("user_id=?", ctx.UserID).Exist(&models.Group{})
 	if err != nil {
-		trans.Rollback()
-		return false, errors.Wrap(err)
+		return false, err
 	}
-	num, err := res.RowsAffected()
-	if err != nil {
-		trans.Rollback()
-		return false, errors.Wrap(err)
+	if !ok {
+		return false, errors2.New("folder unavailable")
 	}
-
-	_, err = trans.Exec(db.WithContext(ctx, fmt.Sprintf("update user_email set group_id=0 where group_id in (%s)", array.Join(allGroupIds, ","))))
-	if err != nil {
-		trans.Rollback()
-		return false, errors.Wrap(err)
-	}
-
-	trans.Commit()
-
-	return num > 0, nil
+	ids := append(getAllChildId(ctx, groupId), groupId)
+	err = db.Transaction(db.Instance, func(tx *xorm.Session) error {
+		if _, err := tx.Where("user_id=?", ctx.UserID).In("id", ids).Delete(&models.Group{}); err != nil {
+			return err
+		}
+		_, err := tx.Table(&models.UserEmail{}).Where("user_id=?", ctx.UserID).In("group_id", ids).Update(map[string]any{"group_id": 0})
+		return err
+	})
+	return err == nil, err
 }
 
 type id struct {
@@ -121,6 +167,15 @@ func GetGroupInfoList(ctx *context.Context) []*GroupItem {
 
 // MoveMailToGroup 将某封邮件移动到某个分组中
 func MoveMailToGroup(ctx *context.Context, mailId []int, groupId int) bool {
+	if len(mailId) == 0 || groupId < 0 {
+		return false
+	}
+	if groupId > 0 {
+		ok, err := db.Instance.ID(groupId).Where("user_id=?", ctx.UserID).Exist(&models.Group{})
+		if err != nil || !ok {
+			return false
+		}
+	}
 	res, err := db.Instance.Exec(db.WithContext(ctx,
 		fmt.Sprintf("update user_email set group_id=? where email_id in (%s) and user_id =?", array.Join(mailId, ","))),
 		groupId, ctx.UserID)
@@ -176,7 +231,7 @@ func getLayerName(ctx *context.Context, item *models.Group, allPath bool) string
 		return item.Name
 	}
 	var parent models.Group
-	_, _ = db.Instance.Table("group").Where("id=?", item.ParentId).Get(&parent)
+	_, _ = db.Instance.Table("group").Where("id=? AND user_id=?", item.ParentId, ctx.UserID).Get(&parent)
 	if allPath {
 		return getLayerName(ctx, &parent, allPath) + "/" + item.Name
 	}

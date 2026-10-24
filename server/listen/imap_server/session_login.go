@@ -1,44 +1,40 @@
 package imap_server
 
 import (
-	"database/sql"
-	"github.com/Jinnrry/pmail/db"
-	"github.com/Jinnrry/pmail/models"
-	"github.com/Jinnrry/pmail/utils/errors"
-	"github.com/Jinnrry/pmail/utils/password"
+	"github.com/Jinnrry/pmail/services/protocolsecurity"
 	"github.com/emersion/go-imap/v2"
-	log "github.com/sirupsen/logrus"
-	"strings"
 )
 
+// 客户端只接受真实邮箱及获准用途授权码，不能回退到网页密码。
 func (s *serverSession) Login(username, pwd string) error {
-	if strings.Contains(username, "@") {
-		args := strings.Split(username, "@")
-		username = args[0]
+	if s.auth == nil {
+		s.auth = protocolsecurity.NewSession("imap", nil)
 	}
-
-	var user models.User
-
-	_, err := db.Instance.Where("account =? and disabled = 0", username).Get(&user)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.WithContext(s.ctx).Errorf("%+v", err)
+	user, err := s.auth.Login(username, pwd)
+	if err != nil {
+		return authError()
 	}
-
-	if user.ID > 0 && password.Verify(user.Password, pwd) {
-		s.status = AUTHORIZED
-
-		s.ctx.UserID = user.ID
-		s.ctx.UserName = user.Name
-		s.ctx.UserAccount = user.Account
-		log.WithContext(s.ctx).Debug("Login successful")
-
-		return nil
+	s.ctx.UserID = user.ID
+	s.ctx.UserName = user.Name
+	s.ctx.UserAccount = user.Account
+	s.status = AUTHORIZED
+	return nil
+}
+func authError() error {
+	return &imap.Error{Type: imap.StatusResponseTypeNo, Code: imap.ResponseCodeAuthenticationFailed, Text: "Invalid or inactive client credentials"}
+}
+func (s *serverSession) authorize() error {
+	if s.auth == nil || s.auth.Check() != nil {
+		return authError()
 	}
-
-	log.WithContext(s.ctx).Info("user not found")
-	return &imap.Error{
-		Type: imap.StatusResponseTypeNo,
-		Code: imap.ResponseCodeAuthenticationFailed,
-		Text: "Invalid credentials (Failure)",
+	return nil
+}
+func (s *serverSession) writable() error {
+	if err := s.authorize(); err != nil {
+		return err
 	}
+	if s.readOnly {
+		return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Mailbox is read-only"}
+	}
+	return nil
 }

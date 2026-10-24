@@ -5,6 +5,9 @@ import (
 )
 
 func (s *serverSession) Namespace() (*imap.NamespaceData, error) {
+	if err := s.authorize(); err != nil {
+		return nil, err
+	}
 	return &imap.NamespaceData{
 		Personal: []imap.NamespaceDescriptor{
 			{

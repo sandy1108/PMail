@@ -3,7 +3,8 @@ package models
 import "time"
 
 type UserEmail struct {
-	DeliveryAddresses string    `xorm:"delivery_addresses TEXT" json:"-"` // 当前用户实际命中的信封地址JSON；旧邮件为空。
+	IMAPDeleted       bool      `xorm:"imap_deleted notnull default(0)" json:"-"` // IMAP删除标记，仅EXPUNGE物理移除当前关系。
+	DeliveryAddresses string    `xorm:"delivery_addresses TEXT" json:"-"`         // 当前用户实际命中的信封地址JSON；旧邮件为空。
 	ID                int       `xorm:"id int unsigned not null pk autoincr"`
 	UserID            int       `xorm:"user_id int not null index('idx_eid') index comment('用户id')"`
 	EmailID           int       `xorm:"email_id not null index('idx_eid') index comment('信件id')"`

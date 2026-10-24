@@ -12,6 +12,9 @@ import (
 // Supports: UID, SeqNum, Date filters, Header search, Body/Text search,
 // Flag filters, Size filters, and logical combinations (NOT, OR)
 func (s *serverSession) Search(kind imapserver.NumKind, criteria *imap.SearchCriteria, options *imap.SearchOptions) (*imap.SearchData, error) {
+	if err := s.authorize(); err != nil {
+		return nil, err
+	}
 	log.WithContext(s.ctx).Debugf("IMAP SEARCH: mailbox=%s, kind=%v, criteria=%+v", s.currentMailbox, kind, criteria)
 
 	// Use the new comprehensive search function
@@ -21,6 +24,21 @@ func (s *serverSession) Search(kind imapserver.NumKind, criteria *imap.SearchCri
 		return nil, err
 	}
 
+	// SEARCH序号也使用当前选择的快照，不能被其他会话的删除悄悄重排。
+	s.mailboxMu.Lock()
+	seqByUID := map[int]int{}
+	for i, id := range s.mailboxUIDs {
+		seqByUID[id] = i + 1
+	}
+	s.mailboxMu.Unlock()
+	kept := retList[:0]
+	for _, item := range retList {
+		if seq, ok := seqByUID[item.ID]; ok {
+			item.SerialNumber = seq
+			kept = append(kept, item)
+		}
+	}
+	retList = kept
 	ret := &imap.SearchData{}
 
 	if kind == imapserver.NumKindSeq {

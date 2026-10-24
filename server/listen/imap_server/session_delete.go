@@ -3,14 +3,20 @@ package imap_server
 import (
 	"github.com/Jinnrry/pmail/services/group"
 	"github.com/emersion/go-imap/v2"
-	"strings"
 )
 
 func (s *serverSession) Delete(mailbox string) error {
-	groupPath := strings.Split(mailbox, "/")
+	if err := s.authorize(); err != nil {
+		return err
+	}
+	if group.IsDefaultBox(mailbox) {
+		return mailboxError()
+	}
+	groupInfo, err := group.GetGroupByFullPath(s.ctx, mailbox)
+	if err == nil && groupInfo.ID == 0 {
+		return mailboxError()
+	}
 
-	groupName := groupPath[len(groupPath)-1]
-	groupInfo, err := group.GetGroupByName(s.ctx, groupName)
 	if err != nil {
 		return &imap.Error{
 			Type: imap.StatusResponseTypeNo,

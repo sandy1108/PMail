@@ -3,7 +3,6 @@ module github.com/Jinnrry/pmail
 go 1.26.9
 
 require (
-	github.com/Jinnrry/gopop v0.0.0-20231113115125-fbdf52ae39ea
 	github.com/alexedwards/scs/mysqlstore v0.0.0-20250417082927-ab20b3feb5e9
 	github.com/alexedwards/scs/postgresstore v0.0.0-20250417082927-ab20b3feb5e9
 	github.com/alexedwards/scs/sqlite3store v0.0.0-20250417082927-ab20b3feb5e9

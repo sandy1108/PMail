@@ -48,6 +48,7 @@ func router(mux *http.ServeMux) {
 	mux.HandleFunc("/api/settings/aliases/delete", contextIterceptor(controllers.DeleteEmailAlias))
 	mux.HandleFunc("/api/settings/access_codes/create", contextIterceptor(controllers.CreateAccessCode))
 	mux.HandleFunc("/api/settings/access_codes/list", contextIterceptor(controllers.ListAccessCodes))
+	mux.HandleFunc("/api/settings/access_codes/update", contextIterceptor(controllers.UpdateAccessCode))
 	mux.HandleFunc("/api/settings/access_codes/revoke", contextIterceptor(controllers.RevokeAccessCode))
 	mux.HandleFunc("/api/settings/modify_password", contextIterceptor(controllers.ModifyPassword))
 	mux.HandleFunc("/api/rule/get", contextIterceptor(controllers.GetRule))

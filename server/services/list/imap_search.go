@@ -212,7 +212,7 @@ func hasFlag(item *response.UserEmailUIDData, flag imap.Flag) bool {
 	case imap.FlagSeen:
 		return item.IsRead == 1
 	case imap.FlagDeleted:
-		return item.Status == 3
+		return item.IMAPDeleted
 	case imap.FlagDraft:
 		return item.Status == 4
 	case imap.FlagJunk:

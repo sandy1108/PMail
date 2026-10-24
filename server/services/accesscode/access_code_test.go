@@ -126,3 +126,70 @@ func TestLifecyclePersistenceAndSecretStorage(t *testing.T) {
 		t.Fatal("disabled user created code")
 	}
 }
+
+func TestPurposesLegacyAndGrantVersion(t *testing.T) {
+	engine, err := xorm.NewEngine("sqlite", filepath.Join(t.TempDir(), "codes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := db.Instance
+	db.Instance = engine
+	defer func() { engine.Close(); db.Instance = old }()
+	if err = engine.Sync2(&models.User{}, &models.AccessCode{}); err != nil {
+		t.Fatal(err)
+	}
+	u := models.User{Account: "owner", Password: "synthetic"}
+	engine.Insert(&u)
+	other := models.User{Account: "other", Password: "different"}
+	engine.Insert(&other)
+	legacy, token, err := Create(u.ID, "legacy", 0, digest(u.Password))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.ID(legacy.ID).Cols("permissions").Update(&models.AccessCode{})
+	if _, err = Authenticate(token); err != nil {
+		t.Fatal("legacy HTTP lost", err)
+	}
+	if _, err = AuthenticateFor(token, "imap"); err == nil {
+		t.Fatal("legacy code escalated")
+	}
+	for _, values := range [][]string{nil, {}, {"imap", "imap"}, {"http.read", "http.write"}, {"smtp"}, {"http.read", "imap", "pop3", "smtp"}} {
+		if _, err = NormalizePermissions(values); err == nil {
+			t.Fatal("invalid purpose accepted", values)
+		}
+	}
+	code, token, err := CreateWithPermissions(u.ID, "client", 0, digest(u.Password), []string{"imap", "pop3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code.Scope == ReadScope {
+		t.Fatal("old server would accept protocol-only code via HTTP")
+	}
+	grant, err := AuthenticateFor(token, "imap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = UpdatePermissions(other.ID, code.ID, []string{"http.write"}, digest(other.Password)); err == nil {
+		t.Fatal("foreign purpose edit accepted")
+	}
+	if err = UpdatePermissions(u.ID, code.ID, []string{"http.read", "imap"}, digest(u.Password)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ValidateGrant(grant.CodeID, grant.Revision, "imap"); err == nil {
+		t.Fatal("old session survived revision change")
+	}
+	fresh, err := AuthenticateFor(token, "imap")
+	if err != nil || fresh.Revision <= grant.Revision {
+		t.Fatal("same code did not accept new revision", err)
+	}
+	if _, err = AuthenticateFor(token, "pop3"); err == nil {
+		t.Fatal("removed protocol accepted")
+	}
+	engine.ID(code.ID).Cols("expires_at").Update(&models.AccessCode{ExpiresAt: time.Now().Unix() - 1})
+	if _, err = ValidateGrant(fresh.CodeID, fresh.Revision, "imap"); err == nil {
+		t.Fatal("expired session accepted")
+	}
+	if err = UpdatePermissions(u.ID, code.ID, []string{"imap"}, digest(u.Password)); err == nil {
+		t.Fatal("expired record resurrected")
+	}
+}

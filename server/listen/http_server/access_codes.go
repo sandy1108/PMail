@@ -14,6 +14,15 @@ import (
 
 // 授权码只按显式路径和方法放行；未来新增接口默认不可访问。
 func allowedAccessCodeRequest(r *http.Request) bool {
+	return allowedScopedRequest(r, false)
+}
+func allowedScopedRequest(r *http.Request, write bool) bool {
+	if write && r.Method == http.MethodPost {
+		switch r.URL.Path {
+		case "/api/email/read", "/api/email/move", "/api/email/del", "/api/group/add", "/api/group/del":
+			return true
+		}
+	}
 	switch r.URL.Path {
 	case "/api/group", "/api/group/list":
 		return r.Method == http.MethodGet || r.Method == http.MethodPost
@@ -55,12 +64,13 @@ func authenticateAccessCode(w http.ResponseWriter, r *http.Request, ctx *context
 	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
 		return fail(http.StatusUnauthorized, "Invalid access code")
 	}
-	user, err := accesscode.Authenticate(fields[1])
+	grant, err := accesscode.AuthenticateFor(fields[1], "http")
+	user := grant.User
 	if err != nil {
 		return fail(http.StatusUnauthorized, "Invalid or inactive access code")
 	}
-	if !allowedAccessCodeRequest(r) {
-		return fail(http.StatusForbidden, "Access code permits mail reading only")
+	if !allowedScopedRequest(r, grant.HTTPWrite) {
+		return fail(http.StatusForbidden, "Access code does not permit this operation")
 	}
 	// Bearer不使用Cookie及网页CSRF校验；有浏览器来源时仍拒绝跨站请求。
 	if origin := r.Header.Get("Origin"); origin != "" && origin != config.Instance.WebOrigin {
@@ -76,6 +86,6 @@ func authenticateAccessCode(w http.ResponseWriter, r *http.Request, ctx *context
 	ctx.UserAccount = user.Account
 	ctx.UserName = user.Name
 	ctx.IsAdmin = false
-	ctx.ReadOnly = true
+	ctx.ReadOnly = !grant.HTTPWrite
 	return true
 }
