@@ -22,6 +22,9 @@
       <el-tab-pane :label="lang.security">
         <SecuritySettings/>
       </el-tab-pane>
+      <el-tab-pane :label="lang.email_aliases" lazy>
+        <EmailAliasSettings/>
+      </el-tab-pane>
       <el-tab-pane :label="lang.group_settings">
         <GroupSettings/>
       </el-tab-pane>
@@ -42,6 +45,7 @@
 import {EpMenu} from "vue-icons-plus/ep";
 import {ref, onMounted, onUnmounted} from 'vue'
 import SecuritySettings from '@/components/SecuritySettings.vue'
+import EmailAliasSettings from '@/components/EmailAliasSettings.vue'
 import lang from '../i18n/i18n';
 import GroupSettings from './GroupSettings.vue';
 import RuleSettings from './RuleSettings.vue';

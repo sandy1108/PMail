@@ -24,6 +24,10 @@
               <span class="sender-name">{{ detailData.from_name !== '' ? detailData.from_name : detailData.from_address }}</span>
               <span class="sender-email" v-if="detailData.from_name !== ''">&lt;{{ detailData.from_address }}&gt;</span>
             </div>
+            <div v-if="detailData.delivery_addresses?.length" class="receivers-line">
+              <span class="meta-label">{{ lang.alias_delivered_to }}:</span>
+              <span class="receiver-chip">{{ detailData.delivery_addresses.join(', ') }}</span>
+            </div>
             <div class="receivers-line">
               <span class="meta-label">{{ lang.to }}:</span>
               <span v-for="(to, index) in tos" :key="index" class="receiver-chip">
