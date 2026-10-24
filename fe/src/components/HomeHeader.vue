@@ -140,6 +140,12 @@ onUnmounted(() => {
   height: 100%;
 }
 
+/* 抽屉内的长设置页由内容区滚动，避免被标签组件默认的overflow:hidden裁掉。 */
+.settings-tabs > :deep(.el-tabs__content) {
+  min-height: 0;
+  overflow-y: auto;
+}
+
 @media (max-width: 768px) {
   .header-container {
     display: flex;
