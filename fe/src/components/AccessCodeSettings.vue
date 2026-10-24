@@ -16,13 +16,15 @@
         </el-select>
       </el-form-item>
       <el-form-item :label="lang.access_code_purposes">
+        <el-checkbox v-model="imap">IMAP</el-checkbox>
+        <el-checkbox v-model="pop3">POP3</el-checkbox>
+        <el-checkbox v-model="ai">AI</el-checkbox>
+      </el-form-item>
+      <el-form-item v-if="ai" :label="lang.access_code_ai_permission">
         <el-select v-model="httpPermission" style="width: 100%">
-          <el-option value="" :label="lang.access_code_http_none" />
-          <el-option value="http.read" :label="lang.access_code_http_read" />
-          <el-option value="http.write" :label="lang.access_code_http_write" />
+          <el-option value="http.read" :label="lang.access_code_ai_read" />
+          <el-option value="http.write" :label="lang.access_code_ai_write" />
         </el-select>
-        <el-checkbox v-model="imap">IMAP (TLS)</el-checkbox>
-        <el-checkbox v-model="pop3">POP3 (TLS)</el-checkbox>
       </el-form-item>
       <p class="description">{{ lang.access_code_purpose_notice }}</p>
       <el-button type="primary" native-type="submit" :loading="creating" :disabled="!name.trim() || !selectedPermissions().length">{{ lang.access_code_create }}</el-button>
@@ -37,20 +39,29 @@
           {{ code.revoked ? lang.access_code_revoked : code.expired ? lang.access_code_expired : lang.access_code_active }}
         </el-tag>
       </div>
-      <p>{{ permissionLabel(code.permissions) }}</p>
+      <div class="purpose-tags" :aria-label="lang.access_code_purposes">
+        <span>{{ lang.access_code_purposes }}:</span>
+        <el-tag v-for="label in permissionLabels(code.permissions)" :key="label" size="small" effect="plain">{{ label }}</el-tag>
+      </div>
       <p>{{ lang.access_code_created }}: {{ formatTime(code.created_at) }}</p>
       <p>{{ lang.access_code_expiry }}: {{ formatTime(code.expires_at) }}</p>
       <el-button v-if="!code.revoked && !code.expired" size="small" @click="editCode(code)">{{ lang.access_code_edit }}</el-button>
       <el-button v-if="!code.revoked" type="danger" plain size="small" :loading="revoking === code.id" @click="revokeCode(code)">{{ lang.access_code_revoke }}</el-button>
     </div>
     <el-dialog v-model="showEdit" :title="lang.access_code_edit" width="min(460px, 90vw)" append-to-body destroy-on-close>
-      <el-select v-model="editHTTP" style="width: 100%">
-        <el-option value="" :label="lang.access_code_http_none" />
-        <el-option value="http.read" :label="lang.access_code_http_read" />
-        <el-option value="http.write" :label="lang.access_code_http_write" />
-      </el-select>
-      <el-checkbox v-model="editIMAP">IMAP (TLS)</el-checkbox>
-      <el-checkbox v-model="editPOP3">POP3 (TLS)</el-checkbox>
+      <el-form label-position="top" @submit.prevent="savePermissions">
+        <el-form-item :label="lang.access_code_purposes">
+          <el-checkbox v-model="editIMAP">IMAP</el-checkbox>
+          <el-checkbox v-model="editPOP3">POP3</el-checkbox>
+          <el-checkbox v-model="editAI">AI</el-checkbox>
+        </el-form-item>
+        <el-form-item v-if="editAI" :label="lang.access_code_ai_permission">
+          <el-select v-model="editHTTP" style="width: 100%">
+            <el-option value="http.read" :label="lang.access_code_ai_read" />
+            <el-option value="http.write" :label="lang.access_code_ai_write" />
+          </el-select>
+        </el-form-item>
+      </el-form>
       <p class="description">{{ lang.access_code_purpose_notice }}</p>
       <p v-if="editError" class="error" role="alert">{{ editError }}</p>
       <template #footer>
@@ -84,22 +95,35 @@ const creating = ref(false)
 const loading = ref(false)
 const revoking = ref(null)
 const error = ref('')
+const ai = ref(true)
 const httpPermission = ref('http.read')
 const imap = ref(false)
 const pop3 = ref(false)
 const showEdit = ref(false)
 const editID = ref(null)
-const editHTTP = ref('')
+const editAI = ref(false)
+const editHTTP = ref('http.read')
 const editIMAP = ref(false)
 const editPOP3 = ref(false)
 const saving = ref(false)
 const editError = ref('')
-const selectedPermissions = (edit = false) => [edit ? editHTTP.value : httpPermission.value, (edit ? editIMAP.value : imap.value) && 'imap', (edit ? editPOP3.value : pop3.value) && 'pop3'].filter(Boolean)
-const permissionLabel = permissions => (permissions || ['http.read']).map(value => ({'http.read': lang.access_code_http_read, 'http.write': lang.access_code_http_write, imap: 'IMAP', pop3: 'POP3'})[value] || value).join(' · ')
+// AI沿用现有HTTP权限；取消AI后即使保留选择值，也不能将HTTP权限随协议用途提交。
+const selectedPermissions = (edit = false) => [
+  (edit ? editIMAP.value : imap.value) && 'imap',
+  (edit ? editPOP3.value : pop3.value) && 'pop3',
+  (edit ? editAI.value : ai.value) && (edit ? editHTTP.value : httpPermission.value)
+].filter(Boolean)
+// 旧HTTP只读码显示为AI只读；界面名称调整不改变授权码或后台权限格式。
+const permissionLabels = permissions => (permissions || ['http.read']).map(value => ({
+  'http.read': `AI · ${lang.access_code_ai_read}`,
+  'http.write': `AI · ${lang.access_code_ai_write}`,
+  imap: 'IMAP', pop3: 'POP3'
+})[value] || value)
 function editCode(code) {
   const permissions = code.permissions || ['http.read']
   editID.value = code.id
-  editHTTP.value = permissions.find(p => p.startsWith('http.')) || ''
+  editAI.value = permissions.includes('http.read') || permissions.includes('http.write')
+  editHTTP.value = permissions.includes('http.write') ? 'http.write' : 'http.read'
   editIMAP.value = permissions.includes('imap')
   editPOP3.value = permissions.includes('pop3')
   editError.value = ''
@@ -190,6 +214,7 @@ h3 { font-size: 18px; margin: 0 0 8px; color: var(--pm-text-primary); }
 .code-card { margin-top: 16px; padding: 16px; border: 1px solid var(--pm-border-color); border-radius: var(--pm-radius-sm); }
 .code-heading { display: flex; justify-content: space-between; gap: 12px; overflow-wrap: anywhere; }
 .code-card p { margin: 6px 0; }
+.purpose-tags { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 10px 0; font-size: 13px; color: var(--pm-text-secondary); }
 .secret { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; background: var(--pm-bg-secondary); user-select: all; }
 .error { color: var(--el-color-danger); font-size: 13px; }
 </style>
