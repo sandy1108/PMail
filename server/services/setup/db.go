@@ -4,6 +4,7 @@ import (
 	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/db"
 	"github.com/Jinnrry/pmail/models"
+	"github.com/Jinnrry/pmail/services/mailaddress"
 	"github.com/Jinnrry/pmail/utils/array"
 	"github.com/Jinnrry/pmail/utils/context"
 	"github.com/Jinnrry/pmail/utils/errors"
@@ -47,7 +48,7 @@ func SetAdminPassword(ctx *context.Context, account, pwd string) error {
 		IsAdmin:  1,
 	}
 
-	_, err := db.Instance.Insert(&user)
+	err := mailaddress.InsertUser(&user)
 	if err != nil {
 		return errors.Wrap(err)
 	}

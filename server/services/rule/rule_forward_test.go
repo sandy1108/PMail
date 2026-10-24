@@ -8,6 +8,7 @@ import (
 	"github.com/Jinnrry/pmail/db"
 	"github.com/Jinnrry/pmail/dto/parsemail"
 	"github.com/Jinnrry/pmail/models"
+	"github.com/Jinnrry/pmail/services/mailaddress"
 	"github.com/Jinnrry/pmail/utils/context"
 	_ "modernc.org/sqlite"
 	"xorm.io/xorm"
@@ -81,5 +82,44 @@ func TestForwardToLocalUserRejectsSelfLoop(t *testing.T) {
 	err := doForward(&context.Context{}, &parsemail.Email{MessageId: 1}, "sender@example.com", &models.User{Account: "sender"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "loop forwarding to self") {
 		t.Fatalf("expected self-loop error, got %v", err)
+	}
+}
+
+func TestForwardToAliasAndRejectAliasSelfLoop(t *testing.T) {
+	oldDB, oldConfig := db.Instance, config.Instance
+	engine, err := xorm.NewEngine("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.SetMaxOpenConns(1)
+	db.Instance = engine
+	config.Instance = &config.Config{Domain: "example.com"}
+	t.Cleanup(func() { engine.Close(); db.Instance = oldDB; config.Instance = oldConfig })
+	if err = engine.Sync2(&models.User{}, &models.EmailAlias{}, &models.UserEmail{}); err != nil {
+		t.Fatal(err)
+	}
+	sender, other := models.User{Account: "sender"}, models.User{Account: "other"}
+	engine.Insert(&sender, &other)
+	own, err := mailaddress.Create(sender.ID, "self", "example.com", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := mailaddress.Create(other.ID, "destination", "example.com", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mail := &parsemail.Email{MessageId: 123}
+	if err = doForward(&context.Context{}, mail, own.Address, &sender, nil); err == nil {
+		t.Fatal("alias bypassed self-loop check")
+	}
+	if err = doForward(&context.Context{}, mail, target.Address, &sender, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = doForward(&context.Context{}, mail, target.Address, &sender, nil); err != nil {
+		t.Fatal(err)
+	}
+	count, err := engine.Where("email_id=? AND user_id=?", 123, other.ID).Count(&models.UserEmail{})
+	if err != nil || count != 1 {
+		t.Fatal("wrong or duplicate alias forward", count, err)
 	}
 }

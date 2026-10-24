@@ -33,7 +33,7 @@ type codeFixture struct {
 	ownID, otherID int
 }
 
-func newCodeFixture(t *testing.T) *codeFixture {
+func newCodeFixture(t *testing.T, seedSession ...bool) *codeFixture {
 	t.Helper()
 	engine, err := xorm.NewEngine("sqlite", filepath.Join(t.TempDir(), "mail.db"))
 	if err != nil {
@@ -48,7 +48,7 @@ func newCodeFixture(t *testing.T) *codeFixture {
 	config.IsInit = true
 	config.Instance = &config.Config{Domain: "example.com", Domains: []string{"example.com"}, WebOrigin: "https://mail.example.com"}
 	session.Instance = scs.New()
-	if err = engine.Sync2(&models.User{}, &models.Email{}, &models.UserEmail{}, &models.Group{}, &models.Rule{}, &models.AccessCode{}); err != nil {
+	if err = engine.Sync2(&models.User{}, &models.Email{}, &models.UserEmail{}, &models.Group{}, &models.Rule{}, &models.AccessCode{}, &models.EmailAlias{}); err != nil {
 		t.Fatal(err)
 	}
 	f := &codeFixture{t: t, engine: engine}
@@ -76,11 +76,25 @@ func newCodeFixture(t *testing.T) *codeFixture {
 	mux := http.NewServeMux()
 	router(mux)
 	f.handler = session.Instance.LoadAndSave(mux)
-	w := f.call("POST", "/api/login", `{"account":"owner","password":"test-password"}`, "", nil, true)
+	var w *httptest.ResponseRecorder
+	if len(seedSession) > 0 && seedSession[0] {
+		// 与实际登录一致地建立测试会话；路由仍走真实会话校验，避免无关的全局限流影响测试。
+		seed := session.Instance.LoadAndSave(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			encoded, _ := json.Marshal(f.owner)
+			digest := sha256.Sum256([]byte(f.owner.Password))
+			session.Instance.Put(r.Context(), "user", string(encoded))
+			session.Instance.Put(r.Context(), "credential", fmt.Sprintf("%x", digest))
+		}))
+		w = httptest.NewRecorder()
+		seed.ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	} else {
+		w = f.call("POST", "/api/login", `{"account":"owner","password":"test-password"}`, "", nil, true)
+	}
 	if len(w.Result().Cookies()) == 0 {
-		t.Fatalf("login: %s", w.Body.String())
+		t.Fatalf("session: %s", w.Body.String())
 	}
 	f.cookie = w.Result().Cookies()[0]
+
 	return f
 }
 func (f *codeFixture) call(method, path, body, token string, cookie *http.Cookie, origin bool) *httptest.ResponseRecorder {

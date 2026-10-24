@@ -5,21 +5,18 @@ import (
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
-	"strings"
 
-	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/consts"
 	"github.com/Jinnrry/pmail/db"
 	"github.com/Jinnrry/pmail/dto/parsemail"
 	"github.com/Jinnrry/pmail/hooks"
 	"github.com/Jinnrry/pmail/hooks/framework"
 	"github.com/Jinnrry/pmail/models"
-	"github.com/Jinnrry/pmail/utils/array"
+	"github.com/Jinnrry/pmail/services/mailaddress"
 	"github.com/Jinnrry/pmail/utils/async"
 	"github.com/Jinnrry/pmail/utils/context"
 	smtp "github.com/emersion/go-smtp"
 	log "github.com/sirupsen/logrus"
-	"xorm.io/builder"
 	"xorm.io/xorm"
 )
 
@@ -137,69 +134,63 @@ func persistInitialAudit(ctx *context.Context, modelEmail models.Email, userIDs 
 	return &saved, nil
 }
 
-func resolveIncomingUsers(ctx *context.Context, email *parsemail.Email, emailType int, reallyTo []string, SPFStatus, dkimStatus bool) ([]*models.User, bool, error) {
-	if emailType != int(consts.EmailTypeReceive) {
-		return nil, false, nil
-	}
-
-	accounts := incomingAccounts(email, reallyTo)
+// persistIncomingAudit在同一事务中复验RCPT归属、保存正文和用户关联。
+// 地址变更与本过程共用写锁，防止删除重建后错投给其他用户。
+func persistIncomingAudit(ctx *context.Context, modelEmail models.Email, addresses []string, accepted []mailaddress.Recipient) ([]*models.User, *models.Email, error) {
+	var saved models.Email
 	var users []*models.User
-	if len(accounts) > 0 {
-		where, params, err := builder.ToSQL(builder.In("LOWER(account)", accounts))
-		if err != nil {
-			return nil, false, err
-		}
-		if err = db.Instance.Table(&models.User{}).Where(where, params...).Find(&users); err != nil {
-			return nil, false, err
-		}
-	}
-	if len(users) > 0 {
-		return users, false, nil
-	}
-
-	if DropUnknownRecipientEmails &&
-		((config.Instance.SpamFilterLevel == 1 && !SPFStatus && !dkimStatus) ||
-			(config.Instance.SpamFilterLevel == 2 && !SPFStatus) ||
-			(config.Instance.SpamFilterLevel == 3 && !dkimStatus)) {
-		log.WithContext(ctx).Infoln("垃圾邮件，拒信")
-		log.WithContext(ctx).Infof("收件人不存在且DKIM验证失败，丢弃邮件: %s -> %v", email.From.EmailAddress, accounts)
-		return nil, true, nil
-	}
-
-	log.WithContext(ctx).Infof("收件人不存在但DKIM验证通过，转交管理员: %s -> %v", email.From.EmailAddress, accounts)
-	if err := db.Instance.Table(&models.User{}).Where("is_admin=1").Find(&users); err != nil {
-		return nil, false, err
-	}
-	if len(users) == 0 {
-		return nil, false, stderrors.New("no administrator available for unknown recipient")
-	}
-	return users, false, nil
-}
-
-func incomingAccounts(email *parsemail.Email, reallyTo []string) []string {
-	var accounts []string
-	if len(reallyTo) > 0 {
-		for _, recipient := range reallyTo {
-			account := parsemail.BuilderUser(recipient)
-			if account == nil {
-				continue
+	err := mailaddress.WithWrite(func() error {
+		return db.Transaction(db.Instance, func(session *xorm.Session) error {
+			users = nil
+			if len(addresses) == 0 || (accepted != nil && len(accepted) != len(addresses)) {
+				return mailaddress.ErrRecipient
 			}
-			name, domain := account.GetDomainAccount()
-			if array.InArray(domain, config.Instance.Domains) && name != "" {
-				accounts = append(accounts, strings.ToLower(name))
+			destinations := map[int][]string{}
+			for i, address := range addresses {
+				recipient, err := mailaddress.ResolveIn(session, address)
+				if err != nil {
+					return err
+				}
+				if accepted != nil && (accepted[i].Address != recipient.Address || accepted[i].User.ID != recipient.User.ID || accepted[i].AliasID != recipient.AliasID) {
+					return mailaddress.ErrRecipient
+				}
+				if _, exists := destinations[recipient.User.ID]; !exists {
+					user := recipient.User
+					users = append(users, &user)
+				}
+				duplicate := false
+				for _, previous := range destinations[recipient.User.ID] {
+					if previous == recipient.Address {
+						duplicate = true
+						break
+					}
+				}
+				if !duplicate {
+					destinations[recipient.User.ID] = append(destinations[recipient.User.ID], recipient.Address)
+				}
 			}
-		}
-		return accounts
-	}
-	for _, recipients := range [][]*parsemail.User{email.To, email.Cc, email.Bcc} {
-		for _, user := range recipients {
-			account, _ := user.GetDomainAccount()
-			if account != "" {
-				accounts = append(accounts, strings.ToLower(account))
+			candidate := modelEmail
+			candidate.Id = 0
+			if _, err := session.Insert(&candidate); err != nil {
+				return err
 			}
-		}
+			if candidate.Id <= 0 {
+				return stderrors.New("email insert returned no id")
+			}
+			for _, user := range users {
+				relation := models.UserEmail{UserID: user.ID, EmailID: candidate.Id, Status: candidate.Status, DeliveryAddresses: json2string(destinations[user.ID])}
+				if _, err := session.Insert(&relation); err != nil {
+					return err
+				}
+			}
+			saved = candidate
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, nil, err
 	}
-	return accounts
+	return users, &saved, nil
 }
 
 func boolInt8(value bool) int8 {

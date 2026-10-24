@@ -1,8 +1,10 @@
 package rule
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
+	"xorm.io/xorm"
 
 	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/consts"
@@ -10,6 +12,7 @@ import (
 	"github.com/Jinnrry/pmail/dto"
 	"github.com/Jinnrry/pmail/dto/parsemail"
 	"github.com/Jinnrry/pmail/models"
+	"github.com/Jinnrry/pmail/services/mailaddress"
 	"github.com/Jinnrry/pmail/services/rule/match"
 	"github.com/Jinnrry/pmail/utils/context"
 	"github.com/Jinnrry/pmail/utils/send"
@@ -106,7 +109,7 @@ func doForward(ctx *context.Context, email *parsemail.Email, forwardAddress stri
 		if strings.EqualFold(account, user.Account) {
 			return fmt.Errorf("loop forwarding to self: %s", forwardAddress)
 		}
-		return forwardToLocalUser(ctx, email, account, forwardAddress)
+		return forwardToLocalUser(ctx, email, forwardAddress, user.ID)
 	}
 
 	if len(rawEmailData) > 0 {
@@ -119,39 +122,30 @@ func doForward(ctx *context.Context, email *parsemail.Email, forwardAddress stri
 	return send.Forward(ctx, email, forwardAddress, user)
 }
 
-func forwardToLocalUser(ctx *context.Context, email *parsemail.Email, account, forwardAddress string) error {
+// 本地规则转发也按最终用户归属检查循环，并与地址变更串行化。
+func forwardToLocalUser(ctx *context.Context, email *parsemail.Email, forwardAddress string, senderID int) error {
 	if email.MessageId <= 0 {
 		return fmt.Errorf("email has not been saved before local forwarding")
 	}
-
-	var user models.User
-	has, err := db.Instance.Table(&models.User{}).
-		Where("LOWER(account)=LOWER(?) and disabled=0", account).
-		Get(&user)
-	if err != nil {
-		return err
-	}
-	if !has {
-		return fmt.Errorf("local forward user not found: %s", forwardAddress)
-	}
-
-	var ue models.UserEmail
-	has, err = db.Instance.Table(&models.UserEmail{}).
-		Where("email_id=? and user_id=?", email.MessageId, user.ID).
-		Get(&ue)
-	if err != nil {
-		return err
-	}
-	if has {
-		return nil
-	}
-
-	_, err = db.Instance.Insert(&models.UserEmail{
-		UserID:  user.ID,
-		EmailID: cast.ToInt(email.MessageId),
-		Status:  cast.ToInt8(email.Status),
+	return mailaddress.WithWrite(func() error {
+		return db.Transaction(db.Instance, func(session *xorm.Session) error {
+			recipient, err := mailaddress.ResolveIn(session, forwardAddress)
+			if err != nil {
+				return err
+			}
+			if recipient.User.ID == senderID {
+				return fmt.Errorf("loop forwarding to self: %s", forwardAddress)
+			}
+			var ue models.UserEmail
+			has, err := session.Where("email_id=? AND user_id=?", email.MessageId, recipient.User.ID).Get(&ue)
+			if err != nil || has {
+				return err
+			}
+			addresses, _ := json.Marshal([]string{recipient.Address})
+			_, err = session.Insert(&models.UserEmail{UserID: recipient.User.ID, EmailID: cast.ToInt(email.MessageId), Status: cast.ToInt8(email.Status), DeliveryAddresses: string(addresses)})
+			return err
+		})
 	})
-	return err
 }
 
 func isLocalDomain(domain string) bool {

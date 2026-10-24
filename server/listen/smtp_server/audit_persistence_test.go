@@ -432,7 +432,7 @@ func newAuditTestEngine(t *testing.T) (*xorm.Engine, string) {
 	}
 	engine.SetMaxOpenConns(1)
 	engine.SetMaxIdleConns(1)
-	if err = engine.Sync2(&models.User{}, &models.Email{}, &models.UserEmail{}); err != nil {
+	if err = engine.Sync2(&models.User{}, &models.Email{}, &models.UserEmail{}, &models.EmailAlias{}); err != nil {
 		engine.Close()
 		t.Fatal(err)
 	}

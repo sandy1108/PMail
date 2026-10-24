@@ -6,6 +6,7 @@ import (
 	"github.com/Jinnrry/pmail/config"
 	"github.com/Jinnrry/pmail/db"
 	"github.com/Jinnrry/pmail/models"
+	"github.com/Jinnrry/pmail/services/mailaddress"
 	"github.com/Jinnrry/pmail/utils/context"
 	"github.com/Jinnrry/pmail/utils/id"
 	"github.com/Jinnrry/pmail/utils/password"
@@ -38,6 +39,7 @@ type Session struct {
 	User          string
 	From          string
 	To            []string
+	Accepted      []mailaddress.Recipient
 	Ctx           *context.Context
 }
 
@@ -110,34 +112,21 @@ func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	log.WithContext(s.Ctx).Debugf("Rcpt Success %+v", to)
 
-	// 入站只接收本域已启用账号，拒绝外域中继和未知用户。
-	parts := strings.Split(strings.ToLower(to), "@")
-	if len(parts) != 2 {
-		return &smtp.SMTPError{Code: 550, Message: "Invalid recipient"}
-	}
-	local := strings.EqualFold(parts[1], config.Instance.Domain)
-	for _, domain := range config.Instance.Domains {
-		if strings.EqualFold(parts[1], domain) {
-			local = true
-			break
-		}
-	}
-	if !local {
-		return &smtp.SMTPError{Code: 550, Message: "Relay denied"}
-	}
-	var user models.User
-	found, err := db.Instance.Where("account=? and disabled=0", parts[0]).Get(&user)
+	// 只允许真实账号及已登记别名；保留归属快照供DATA事务复验。
+	recipient, err := mailaddress.Resolve(to)
 	if err != nil {
+		if errors.Is(err, mailaddress.ErrRecipient) {
+			return &smtp.SMTPError{Code: 550, Message: "Unknown recipient or relay denied"}
+		}
 		return &smtp.SMTPError{Code: 451, Message: "Temporary recipient lookup failure"}
 	}
-	if !found {
-		return &smtp.SMTPError{Code: 550, Message: "Unknown recipient"}
-	}
-	s.To = append(s.To, to)
+	s.To = append(s.To, recipient.Address)
+	s.Accepted = append(s.Accepted, recipient)
+
 	return nil
 }
 
-func (s *Session) Reset() { s.From = ""; s.To = nil }
+func (s *Session) Reset() { s.From = ""; s.To = nil; s.Accepted = nil }
 
 func (s *Session) Logout() error {
 	return nil

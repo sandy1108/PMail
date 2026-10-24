@@ -6,6 +6,7 @@ import (
 	"github.com/Jinnrry/pmail/db"
 	"github.com/Jinnrry/pmail/dto/response"
 	"github.com/Jinnrry/pmail/models"
+	"github.com/Jinnrry/pmail/services/mailaddress"
 	"github.com/Jinnrry/pmail/utils/array"
 	"github.com/Jinnrry/pmail/utils/context"
 	"github.com/Jinnrry/pmail/utils/password"
@@ -51,9 +52,9 @@ func CreateUser(ctx *context.Context, w http.ResponseWriter, req *http.Request) 
 	user.Password = password.Encode(reqData.Password)
 	user.Account = reqData.Account
 
-	_, err = db.Instance.Insert(&user)
+	err = mailaddress.InsertUser(&user)
 	if err != nil {
-		response.NewErrorResponse(response.ServerError, err.Error(), "").FPrint(w)
+		aliasError(w, err)
 		return
 	}
 
@@ -167,7 +168,12 @@ func EditUser(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
 		user.Password = password.Encode(reqData.Password)
 	}
 
-	num, err := db.Instance.ID(user.ID).Cols("name", "password", "disabled").Update(&user)
+	var num int64
+	err = mailaddress.WithWrite(func() error {
+		var updateErr error
+		num, updateErr = db.Instance.ID(user.ID).Cols("name", "password", "disabled").Update(&user)
+		return updateErr
+	})
 
 	if err != nil {
 		response.NewErrorResponse(response.ServerError, err.Error(), "").FPrint(w)

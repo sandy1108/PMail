@@ -37,6 +37,12 @@ func GetEmailDetail(ctx *context.Context, id int, markRead bool) (*response.Emai
 	}
 
 	email.IsRead = ue.IsRead
+	email.DeliveryAddresses = []string{}
+	if ue.ID > 0 && ue.DeliveryAddresses != "" {
+		if err := json.Unmarshal([]byte(ue.DeliveryAddresses), &email.DeliveryAddresses); err != nil {
+			return nil, err
+		}
+	}
 
 	if markRead && ue.IsRead == 0 {
 		ue.IsRead = 1

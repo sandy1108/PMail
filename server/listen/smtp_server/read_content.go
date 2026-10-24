@@ -18,6 +18,7 @@ import (
 	"github.com/Jinnrry/pmail/hooks/framework"
 	"github.com/Jinnrry/pmail/listen/imap_server"
 	"github.com/Jinnrry/pmail/models"
+	"github.com/Jinnrry/pmail/services/mailaddress"
 	"github.com/Jinnrry/pmail/services/rule"
 	"github.com/Jinnrry/pmail/utils/array"
 	"github.com/Jinnrry/pmail/utils/async"
@@ -27,12 +28,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cast"
 )
-
-// DropUnknownRecipientEmails 是代码级别的功能开关
-// 当设置为 true 时，发给不存在用户的邮件将被直接丢弃，不会保存到数据库
-// 这可以有效防止扫描器产生的垃圾邮件被存入第一个用户（管理员）的邮箱
-// 注意：此开关只能通过修改代码来更改，不暴露给用户配置
-const DropUnknownRecipientEmails = true
 
 func (s *Session) Data(r io.Reader) error {
 
@@ -124,7 +119,7 @@ func (s *Session) Data(r io.Reader) error {
 			email.Status = 3
 		}
 
-		users, dbEmail, saveErr := saveEmail(ctx, len(emailData), email, 0, 0, s.To, SPFStatus, dkimStatus)
+		users, dbEmail, saveErr := saveEmail(ctx, len(emailData), email, 0, 0, s.To, SPFStatus, dkimStatus, s.Accepted)
 		if saveErr != nil {
 			log.WithContext(ctx).Errorf("CRITICAL audit_event=initial_persist_failed direction=inbound msg_id=%q error=%v", email.MsgID, saveErr)
 			return localPersistenceSMTPError()
@@ -171,7 +166,7 @@ func (s *Session) Data(r io.Reader) error {
 	return nil
 }
 
-func saveEmail(ctx *context.Context, size int, email *parsemail.Email, sendUserID int, emailType int, reallyTo []string, SPFStatus, dkimStatus bool) ([]*models.User, *models.Email, error) {
+func saveEmail(ctx *context.Context, size int, email *parsemail.Email, sendUserID int, emailType int, reallyTo []string, SPFStatus, dkimStatus bool, accepted ...[]mailaddress.Recipient) ([]*models.User, *models.Email, error) {
 	if email == nil {
 		return nil, nil, oerrors.New("email is missing")
 	}
@@ -181,11 +176,6 @@ func saveEmail(ctx *context.Context, size int, email *parsemail.Email, sendUserI
 	if emailType == int(consts.EmailTypeReceive) && email.Authentication != nil {
 		SPFStatus = email.Authentication.SPFPassed
 		dkimStatus = email.Authentication.DKIMPassed
-	}
-
-	users, drop, err := resolveIncomingUsers(ctx, email, emailType, reallyTo, SPFStatus, dkimStatus)
-	if err != nil || drop {
-		return users, nil, err
 	}
 
 	msgID := email.MsgID
@@ -220,22 +210,24 @@ func saveEmail(ctx *context.Context, size int, email *parsemail.Email, sendUserI
 		MsgID:        msgID,
 	}
 
-	var userIDs []int
+	var users []*models.User
+	var saved *models.Email
+	var err error
 	if emailType == int(consts.EmailTypeReceive) {
-		for _, user := range users {
-			userIDs = append(userIDs, user.ID)
+		var snapshot []mailaddress.Recipient
+		if len(accepted) > 0 {
+			snapshot = accepted[0]
 		}
+		users, saved, err = persistIncomingAudit(ctx, modelEmail, reallyTo, snapshot)
 	} else {
 		modelEmail.Status = consts.EmailStatusDeliveryPending
 		modelEmail.Error = sql.NullString{String: deliveryPendingError, Valid: true}
-		userIDs = []int{sendUserID}
+		saved, err = persistInitialAudit(ctx, modelEmail, []int{sendUserID})
+	}
+	if err != nil {
+		return nil, nil, err
 	}
 
-	log.WithContext(ctx).Debugf("开始入库！")
-	saved, err := persistInitialAudit(ctx, modelEmail, userIDs)
-	if err != nil {
-		return users, nil, err
-	}
 	email.MessageId = cast.ToInt64(saved.Id)
 	email.MsgID = saved.MsgID
 	return users, saved, nil
