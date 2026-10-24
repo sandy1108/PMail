@@ -64,3 +64,5 @@ go test ./listen/smtp_server -run 'Test(Proxy|InboundRecipientAndReset|Outgoing|
 通用问题说明见[开发说明](development-notes.md)。
 
 邮箱别名使用方法、接口和升级边界见[邮箱别名说明](email-aliases.md)。
+
+IMAP/POP3的TLS端口、统一用途授权码、证书、转发和升级回退见[客户端协议说明](client-protocols.md)。默认关闭，开启需明确配置；不开放110/143明文监听。
