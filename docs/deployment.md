@@ -35,7 +35,10 @@ python3 mailctl.py stop
 - `smtpHostname`：SMTP招呼名，与邮箱后缀`domain`/`domains`分别配置。
 - `proxyRequired=true`及`proxyTrustedIPs`：强制PROXYv2/TCP并限制直接来源；仅在可信代理确实发送该头时启用，普通SMTP客户端无法直连此入口。
 - `httpsEnabled=2`：内置HTTP，可配合HTTPS反向代理使用。实际监听范围和入口由部署者决定。
-- `enableSubmission`、`enablePOP3`、`enableIMAP`、`smtpAuthEnabled`：控制相应监听和AUTH。入站策略仅允许本域已启用账号或其启用别名，启用客户端发信需另外评估中继授权，不能仅改开关。
+- `enableSubmission`：仅启用独立隐式TLS的SMTP客户端提交，不再捆绑587。`submissionBind`/`submissionPort`默认127.0.0.1:1465，要求显式IP及非特权端口；公网465可经可信TCP转发，不能添加入站SMTP专用的PROXY头。
+- `enablePOP3`、`enableIMAP`：控制对应隐式TLS监听。`smtpAuthEnabled`为旧兼容字段，入站AUTH始终禁用；SMTP提交只接受SMTP用途授权码，不能通过此字段开启网页登录密码认证。
+- `clientHost`及`clientIMAPPort`/`clientPOP3Port`/`clientSMTPPort`：网页教程使用的对外参数，端口默认993/995/465。主机名未设时沿用smtpHostname、webDomain或domain；这些字段只展示教程，不创建监听或转发。非标准端口部署必须显式填写对外参数。
+- 入站策略只接收本域真实账号及启用别名；SMTP提交要求授权码认证、账号发件身份和生命周期复验。不要使用入站25作为客户端发送端口。
 - `webOrigin`：精确匹配浏览器origin，包括非默认端口。POST要求同源JSON。
 - `insecureLocalCookies=false`：Cookie使用Secure/HttpOnly/SameSite=Strict；仅回环HTTP调试允许true，且`webOrigin`必须为回环IP的HTTP地址。
 - `sslType="1"`：使用证书文件，不启用ACME签发。替换证书后应受控重启并分别验证HTTPS和SMTP证书；不要依赖定时证书检查及时重载。
@@ -66,3 +69,18 @@ go test ./listen/smtp_server -run 'Test(Proxy|InboundRecipientAndReset|Outgoing|
 邮箱别名使用方法、接口和升级边界见[邮箱别名说明](email-aliases.md)。
 
 IMAP/POP3的TLS端口、统一用途授权码、证书、转发和升级回退见[客户端协议说明](client-protocols.md)。默认关闭，开启需明确配置；不开放110/143明文监听。
+
+
+## 客户端与服务器间投递的端口边界
+
+| 服务 | 默认本机监听 | 推荐对外端口 | 加密与认证 |
+|---|---|---|---|
+| IMAP | 127.0.0.1:1993 | 993 | 隐式TLS；完整邮箱＋IMAP用途码 |
+| POP3 | 127.0.0.1:1995 | 995 | 隐式TLS；完整邮箱＋POP3用途码 |
+| SMTP提交 | 127.0.0.1:1465 | 465 | 隐式TLS；完整邮箱＋SMTP用途码 |
+| SMTP入站 | 127.0.0.1:2525 | 25 | 服务器间投递，支持机会式STARTTLS，不提供AUTH |
+| HTTP | 127.0.0.1:18080 | HTTPS反向代理自定 | Web及HTTP API，不直接暴露HTTP |
+
+客户端不提供110/143/587；TLS最低1.2，证书必须覆盖客户端使用的主机名。465与25是不同用途，不能替换MX投递端口25。SMTP提交的信封收件人决定实际投递，To/Cc/Bcc不能隐式添加收件人，发送前先保存审计，沿用原有结果记录和错误返回。
+
+证书替换后按维护流程重启PMail，分别核验全部TLS监听；HTTP健康检查不能替代协议健康检查。开放端口和认证成功不代表外发出口或SPF/DKIM/DMARC已具备，必须另做授权验收。
