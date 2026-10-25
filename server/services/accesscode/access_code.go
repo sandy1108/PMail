@@ -130,7 +130,7 @@ func validateCode(code models.AccessCode, protocol string) (Grant, error) {
 			allowed = true
 			write = p == "http.write"
 		}
-		if (protocol == "imap" || protocol == "pop3") && p == protocol {
+		if (protocol == "imap" || protocol == "pop3" || protocol == "smtp") && p == protocol {
 			allowed = true
 		}
 	}
@@ -149,12 +149,12 @@ func validateCode(code models.AccessCode, protocol string) (Grant, error) {
 }
 
 func NormalizePermissions(values []string) ([]string, error) {
-	if len(values) == 0 || len(values) > 3 {
+	if len(values) == 0 || len(values) > 4 {
 		return nil, ErrParams
 	}
 	seen := map[string]bool{}
 	for _, v := range values {
-		if v != "http.read" && v != "http.write" && v != "imap" && v != "pop3" {
+		if v != "http.read" && v != "http.write" && v != "imap" && v != "pop3" && v != "smtp" {
 			return nil, ErrParams
 		}
 		if seen[v] {

@@ -8,68 +8,41 @@ import (
 	"time"
 
 	"github.com/Jinnrry/pmail/config"
+	"github.com/Jinnrry/pmail/services/protocolsecurity"
 	"github.com/emersion/go-smtp"
 	log "github.com/sirupsen/logrus"
 )
 
 var instance *smtp.Server
 var instanceTls *smtp.Server
-var instanceTlsNew *smtp.Server
 
-func StartWithTLSNew() {
-	be := &Backend{}
-
-	instanceTlsNew = smtp.NewServer(be)
-
-	instanceTlsNew.Addr = ":587"
-	instanceTlsNew.Domain = config.Instance.Domain
-	instanceTlsNew.ReadTimeout = 10 * time.Second
-	instanceTlsNew.WriteTimeout = 10 * time.Second
-	instanceTlsNew.MaxMessageBytes = 1024 * 1024 * 30
-	instanceTlsNew.MaxRecipients = 50
-	// force TLS for auth
-	instanceTlsNew.AllowInsecureAuth = true
-	// Load the certificate and key
-	cer, err := tls.LoadX509KeyPair(config.Instance.SSLPublicKeyPath, config.Instance.SSLPrivateKeyPath)
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	// Configure the TLS support for STARTTLS
-	instanceTlsNew.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}, MinVersion: tls.VersionTLS12}
-
-	log.Println("Starting Smtp With STARTTLS Server Port:", instanceTlsNew.Addr)
-	// 587端口使用STARTTLS（先明文连接，再升级TLS），而非隐式TLS
-	if err := instanceTlsNew.ListenAndServe(); err != nil {
-		log.Fatal(err)
-	}
+// newSubmissionServer只用于隐式TLS提交，与入站SMTP完全隔离，不创建587监听。
+func newSubmissionServer() *smtp.Server {
+	s := smtp.NewServer(&Backend{Submission: true})
+	s.Domain = config.Instance.SMTPHostname
+	s.ReadTimeout = 30 * time.Second
+	s.WriteTimeout = 30 * time.Second
+	s.MaxMessageBytes = 30 * 1024 * 1024
+	s.MaxRecipients = 50
+	s.AllowInsecureAuth = false
+	// TLS在预算监听器外包装；不设置STARTTLS能力，TLS从连接开始即生效。
+	return s
 }
-
 func StartWithTLS() {
-	be := &Backend{}
-
-	instanceTls = smtp.NewServer(be)
-
-	instanceTls.Addr = ":465"
-	instanceTls.Domain = config.Instance.Domain
-	instanceTls.ReadTimeout = 10 * time.Second
-	instanceTls.WriteTimeout = 10 * time.Second
-	instanceTls.MaxMessageBytes = 1024 * 1024 * 30
-	instanceTls.MaxRecipients = 50
-	// force TLS for auth
-	instanceTls.AllowInsecureAuth = true
-	// Load the certificate and key
 	cer, err := tls.LoadX509KeyPair(config.Instance.SSLPublicKeyPath, config.Instance.SSLPrivateKeyPath)
 	if err != nil {
-		log.Fatal(err)
+		log.Error("Submission certificate: ", err)
 		return
 	}
-	// Configure the TLS support
-	instanceTls.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cer}, MinVersion: tls.VersionTLS12}
-
-	log.Println("Starting Smtp With SSL Server Port:", instanceTls.Addr)
-	if err := instanceTls.ListenAndServeTLS(); err != nil {
-		log.Fatal(err)
+	listener, err := protocolsecurity.ListenTLS(config.Instance.SubmissionBind, config.Instance.SubmissionPort, cer)
+	if err != nil {
+		log.Error("Submission listener: ", err)
+		return
+	}
+	defer listener.Close()
+	instanceTls = newSubmissionServer()
+	if err = instanceTls.Serve(listener); err != nil && !errors.Is(err, smtp.ErrServerClosed) {
+		log.Error(err)
 	}
 }
 
@@ -117,7 +90,4 @@ func Stop() {
 		instanceTls.Close()
 	}
 
-	if instanceTlsNew != nil {
-		instanceTlsNew.Close()
-	}
 }

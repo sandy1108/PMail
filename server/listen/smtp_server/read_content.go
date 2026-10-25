@@ -30,6 +30,11 @@ import (
 )
 
 func (s *Session) Data(r io.Reader) error {
+	if s.Submission {
+		if err := s.checkSubmission(); err != nil {
+			return err
+		}
+	}
 
 	ctx := s.Ctx
 
@@ -41,6 +46,11 @@ func (s *Session) Data(r io.Reader) error {
 		return err
 	}
 
+	if s.Submission {
+		if err := s.validateSubmissionHeaders(emailData); err != nil {
+			return err
+		}
+	}
 	// 邮件正文和附件不进入调试日志。
 
 	log.WithContext(ctx).Debugf("开始执行插件ReceiveParseBefore！")
@@ -86,6 +96,9 @@ func (s *Session) Data(r io.Reader) error {
 			return nil
 		}
 
+		if s.Submission {
+			return s.submitEmail(email, send.SendEnvelope)
+		}
 		return s.deliverOutgoingEmail(email, send.Send)
 
 	} else {

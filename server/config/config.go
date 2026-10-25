@@ -34,6 +34,12 @@ type Config struct {
 	SMTPPort             int      `json:"smtpPort"`
 	SMTPHostname         string   `json:"smtpHostname"`
 	DisableSMTP          bool     `json:"disableSMTP"`
+	SubmissionBind       string   `json:"submissionBind"`
+	SubmissionPort       int      `json:"submissionPort"`
+	ClientHost           string   `json:"clientHost"`
+	ClientIMAPPort       int      `json:"clientIMAPPort"`
+	ClientPOP3Port       int      `json:"clientPOP3Port"`
+	ClientSMTPPort       int      `json:"clientSMTPPort"`
 	EnableSubmission     bool     `json:"enableSubmission"`
 	EnablePOP3           bool     `json:"enablePOP3"`
 	EnableIMAP           bool     `json:"enableIMAP"`
@@ -299,6 +305,30 @@ func (c *Config) fixPath() {
 
 // Validate 在启动前拒绝无效监听与代理配置，防止静默回退到全网卡。
 func (c *Config) Validate() error {
+	if c.SubmissionBind == "" {
+		c.SubmissionBind = "127.0.0.1"
+	}
+	if c.SubmissionPort == 0 {
+		c.SubmissionPort = 1465
+	}
+	if net.ParseIP(c.SubmissionBind) == nil || c.SubmissionPort < 1024 || c.SubmissionPort > 65535 {
+		return fmt.Errorf("invalid submission TLS listener")
+	}
+	if c.ClientIMAPPort == 0 {
+		c.ClientIMAPPort = 993
+	}
+	if c.ClientPOP3Port == 0 {
+		c.ClientPOP3Port = 995
+	}
+	if c.ClientSMTPPort == 0 {
+		c.ClientSMTPPort = 465
+	}
+	for _, port := range []int{c.ClientIMAPPort, c.ClientPOP3Port, c.ClientSMTPPort} {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("invalid advertised client port")
+		}
+	}
+
 	if c.IMAPBind == "" {
 		c.IMAPBind = "127.0.0.1"
 	}
@@ -345,7 +375,7 @@ func (c *Config) Validate() error {
 		port    int
 		enabled bool
 	}
-	endpoints := []endpoint{{c.HTTPBind, c.HttpPort, true}, {c.SMTPBind, c.SMTPPort, !c.DisableSMTP}, {c.IMAPBind, c.IMAPPort, c.EnableIMAP}, {c.POP3Bind, c.POP3Port, c.EnablePOP3}}
+	endpoints := []endpoint{{c.SubmissionBind, c.SubmissionPort, c.EnableSubmission}, {c.HTTPBind, c.HttpPort, true}, {c.SMTPBind, c.SMTPPort, !c.DisableSMTP}, {c.IMAPBind, c.IMAPPort, c.EnableIMAP}, {c.POP3Bind, c.POP3Port, c.EnablePOP3}}
 	for i, a := range endpoints {
 		for _, b := range endpoints[i+1:] {
 			if a.enabled && b.enabled && a.port == b.port && (a.bind == b.bind || net.ParseIP(a.bind).IsUnspecified() || net.ParseIP(b.bind).IsUnspecified()) {
@@ -385,4 +415,24 @@ func (c *Config) Validate() error {
 }
 func (c *Config) HTTPAddress(port int) string {
 	return net.JoinHostPort(c.HTTPBind, strconv.Itoa(port))
+}
+
+// ClientSettings仅公开客户端连接参数，不返回凭据、路径、代理或其他服务配置。
+func (c *Config) ClientSettings(account string) map[string]any {
+	host := c.ClientHost
+	if host == "" {
+		host = c.SMTPHostname
+	}
+	if host == "" {
+		host = c.WebDomain
+	}
+	if host == "" {
+		host = c.Domain
+	}
+	return map[string]any{
+		"host": host, "username": account + "@" + c.Domain,
+		"imap": map[string]any{"enabled": c.EnableIMAP, "port": c.ClientIMAPPort, "local_port": c.IMAPPort},
+		"pop3": map[string]any{"enabled": c.EnablePOP3, "port": c.ClientPOP3Port, "local_port": c.POP3Port},
+		"smtp": map[string]any{"enabled": c.EnableSubmission, "port": c.ClientSMTPPort, "local_port": c.SubmissionPort},
+	}
 }

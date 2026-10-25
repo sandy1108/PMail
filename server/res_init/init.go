@@ -61,7 +61,6 @@ func Init(serverVersion string) {
 		}
 		if config.Instance.EnableSubmission {
 			go smtp_server.StartWithTLS()
-			go smtp_server.StartWithTLSNew()
 		}
 		// http server start
 		go http_server.HttpsStart()

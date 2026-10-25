@@ -35,3 +35,18 @@ func TestCookieOriginBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestSubmissionListenerDefaultsAndConflicts(t *testing.T) {
+	c := &Config{EnableSubmission: true}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if c.SubmissionBind != "127.0.0.1" || c.SubmissionPort != 1465 {
+		t.Fatal("unsafe submission defaults")
+	}
+	for _, bad := range []*Config{{EnableSubmission: true, SubmissionPort: 465}, {EnableSubmission: true, SubmissionBind: "localhost"}, {EnableSubmission: true, SubmissionPort: 2525}, {EnableSubmission: true, EnableIMAP: true, SubmissionPort: 1993}} {
+		if bad.Validate() == nil {
+			t.Fatal("unsafe or conflicting endpoint accepted")
+		}
+	}
+}

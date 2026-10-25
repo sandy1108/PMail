@@ -153,7 +153,7 @@ func TestPurposesLegacyAndGrantVersion(t *testing.T) {
 	if _, err = AuthenticateFor(token, "imap"); err == nil {
 		t.Fatal("legacy code escalated")
 	}
-	for _, values := range [][]string{nil, {}, {"imap", "imap"}, {"http.read", "http.write"}, {"smtp"}, {"http.read", "imap", "pop3", "smtp"}} {
+	for _, values := range [][]string{nil, {}, {"imap", "imap"}, {"http.read", "http.write"}, {"unknown"}, {"http.read", "http.write", "imap", "pop3", "smtp"}} {
 		if _, err = NormalizePermissions(values); err == nil {
 			t.Fatal("invalid purpose accepted", values)
 		}
@@ -191,5 +191,45 @@ func TestPurposesLegacyAndGrantVersion(t *testing.T) {
 	}
 	if err = UpdatePermissions(u.ID, code.ID, []string{"imap"}, digest(u.Password)); err == nil {
 		t.Fatal("expired record resurrected")
+	}
+}
+
+// SMTP是显式新增用途，旧AI码不能自动获得发信权限。
+func TestSMTPPurposeExplicitAndRevocable(t *testing.T) {
+	engine, err := xorm.NewEngine("sqlite", filepath.Join(t.TempDir(), "smtp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := db.Instance
+	db.Instance = engine
+	t.Cleanup(func() { db.Instance = old; engine.Close() })
+	if err = engine.Sync2(&models.User{}, &models.AccessCode{}); err != nil {
+		t.Fatal(err)
+	}
+	u := models.User{Account: "sender", Password: "synthetic"}
+	engine.Insert(&u)
+	_, oldToken, err := Create(u.ID, "AI", 0, digest(u.Password))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = AuthenticateFor(oldToken, "smtp"); err == nil {
+		t.Fatal("AI escalated to SMTP")
+	}
+	code, token, err := CreateWithPermissions(u.ID, "client", 0, digest(u.Password), []string{"imap", "pop3", "smtp", "http.read"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := AuthenticateFor(token, "smtp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = UpdatePermissions(u.ID, code.ID, []string{"imap"}, digest(u.Password)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ValidateGrant(grant.CodeID, grant.Revision, "smtp"); err == nil {
+		t.Fatal("removed SMTP permission still valid")
+	}
+	if _, err = AuthenticateFor(token, "smtp"); err == nil {
+		t.Fatal("SMTP scope removal ignored")
 	}
 }

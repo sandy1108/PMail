@@ -81,6 +81,12 @@ func Send(ctx *context.Context, e *parsemail.Email) (error, map[string]error) {
 
 }
 
+// SendEnvelope以经过认证检查的SMTP信封投递，信头不能添加隐含收件人。
+func SendEnvelope(ctx *context.Context, e *parsemail.Email, to []*parsemail.User, from string) (error, map[string]error) {
+	_, domain := parsemail.BuilderUser(from).GetDomainAccount()
+	return doSend(ctx, domain, e.BuildBytes(ctx, true), to, from)
+}
+
 func doSend(ctx *context.Context, fromDomain string, data []byte, to []*parsemail.User, from string) (error, map[string]error) {
 
 	// 按域名整理
