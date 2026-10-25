@@ -1,6 +1,7 @@
 <template>
   <section class="access-codes">
     <h3>{{ lang.access_codes }}</h3>
+    <el-button link type="primary" @click="showClientHelp = true">{{ lang.client_help_title }}</el-button>
     <p class="description">{{ lang.access_codes_desc }}</p>
     <p class="description">{{ lang.access_codes_password_notice }}</p>
     <el-form label-position="top" @submit.prevent="createCode">
@@ -18,6 +19,7 @@
       <el-form-item :label="lang.access_code_purposes">
         <el-checkbox v-model="imap">IMAP</el-checkbox>
         <el-checkbox v-model="pop3">POP3</el-checkbox>
+        <el-checkbox v-model="smtp">SMTP</el-checkbox>
         <el-checkbox v-model="ai">AI</el-checkbox>
       </el-form-item>
       <el-form-item v-if="ai" :label="lang.access_code_ai_permission">
@@ -48,11 +50,13 @@
       <el-button v-if="!code.revoked && !code.expired" size="small" @click="editCode(code)">{{ lang.access_code_edit }}</el-button>
       <el-button v-if="!code.revoked" type="danger" plain size="small" :loading="revoking === code.id" @click="revokeCode(code)">{{ lang.access_code_revoke }}</el-button>
     </div>
+    <ClientConnectionHelp v-model="showClientHelp" />
     <el-dialog v-model="showEdit" :title="lang.access_code_edit" width="min(460px, 90vw)" append-to-body destroy-on-close>
       <el-form label-position="top" @submit.prevent="savePermissions">
         <el-form-item :label="lang.access_code_purposes">
           <el-checkbox v-model="editIMAP">IMAP</el-checkbox>
           <el-checkbox v-model="editPOP3">POP3</el-checkbox>
+          <el-checkbox v-model="editSMTP">SMTP</el-checkbox>
           <el-checkbox v-model="editAI">AI</el-checkbox>
         </el-form-item>
         <el-form-item v-if="editAI" :label="lang.access_code_ai_permission">
@@ -82,10 +86,14 @@
 
 <script setup>
 import {onMounted, ref} from 'vue'
+import ClientConnectionHelp from './ClientConnectionHelp.vue'
 import {ElMessageBox, ElNotification} from 'element-plus'
 import {http} from '@/utils/axios'
 import lang from '../i18n/i18n'
 
+const showClientHelp = ref(false)
+const smtp = ref(false)
+const editSMTP = ref(false)
 const codes = ref([])
 const name = ref('')
 const days = ref(30)
@@ -111,13 +119,14 @@ const editError = ref('')
 const selectedPermissions = (edit = false) => [
   (edit ? editIMAP.value : imap.value) && 'imap',
   (edit ? editPOP3.value : pop3.value) && 'pop3',
+  (edit ? editSMTP.value : smtp.value) && 'smtp',
   (edit ? editAI.value : ai.value) && (edit ? editHTTP.value : httpPermission.value)
 ].filter(Boolean)
 // 旧HTTP只读码显示为AI只读；界面名称调整不改变授权码或后台权限格式。
 const permissionLabels = permissions => (permissions || ['http.read']).map(value => ({
   'http.read': `AI · ${lang.access_code_ai_read}`,
   'http.write': `AI · ${lang.access_code_ai_write}`,
-  imap: 'IMAP', pop3: 'POP3'
+  imap: 'IMAP', pop3: 'POP3', smtp: 'SMTP'
 })[value] || value)
 function editCode(code) {
   const permissions = code.permissions || ['http.read']
@@ -126,6 +135,7 @@ function editCode(code) {
   editHTTP.value = permissions.includes('http.write') ? 'http.write' : 'http.read'
   editIMAP.value = permissions.includes('imap')
   editPOP3.value = permissions.includes('pop3')
+  editSMTP.value = permissions.includes('smtp')
   editError.value = ''
   showEdit.value = true
 }

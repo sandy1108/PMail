@@ -70,3 +70,29 @@ func TestHTTPWriteCodeCannotModifyForeignFolders(t *testing.T) {
 		}
 	}
 }
+
+func TestSMTPCodeCannotUseHTTPAndClientGuideIsSessionOnly(t *testing.T) {
+	f := newCodeFixture(t, true)
+	data := f.success(f.call("POST", "/api/settings/access_codes/create", `{"name":"SMTP","permissions":["smtp"]}`, "", f.cookie, true))
+	var code struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &code); err != nil || code.Token == "" {
+		t.Fatal("missing SMTP token", err)
+	}
+	for _, path := range []string{"/api/user/info", "/api/email/list", "/api/email/send"} {
+		mustDeny(t, f.call("POST", path, `{}`, code.Token, nil, false))
+	}
+	data = f.success(f.call("POST", "/api/user/info", `{}`, "", f.cookie, true))
+	var info struct {
+		ClientSettings map[string]any `json:"client_settings"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil || info.ClientSettings["username"] == nil {
+		t.Fatal("missing guide settings", err)
+	}
+	for _, key := range []string{"password", "dbDSN", "SSLPrivateKeyPath", "proxyTrustedIPs"} {
+		if _, ok := info.ClientSettings[key]; ok {
+			t.Fatal("private configuration leaked")
+		}
+	}
+}

@@ -113,10 +113,11 @@ func Info(ctx *context.Context, w http.ResponseWriter, req *http.Request) {
 	domains = append([]string{config.Instance.Domain}, domains...)
 
 	response.NewSuccessResponse(map[string]any{
-		"account":  ctx.UserAccount,
-		"name":     ctx.UserName,
-		"is_admin": ctx.IsAdmin,
-		"domains":  domains,
+		"client_settings": config.Instance.ClientSettings(ctx.UserAccount),
+		"account":         ctx.UserAccount,
+		"name":            ctx.UserName,
+		"is_admin":        ctx.IsAdmin,
+		"domains":         domains,
 	}).FPrint(w)
 }
 
